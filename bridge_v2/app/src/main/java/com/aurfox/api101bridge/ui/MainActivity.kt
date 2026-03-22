@@ -3,25 +3,46 @@ package com.aurfox.api101bridge.ui
 import android.os.Bundle
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import java.io.File
 
-class MainActivity : AppCompatActivity() {
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        val text = TextView(this).apply {
-            text = """
-                API101 Bridge Host
+class MainActivity : AppCompatActivity () {
+    override fun onCreate (savedInstanceState: Bundle?) {
+        super.onCreate (savedInstanceState)
 
-                This app is the visible shell of the bridge module.
-                Put an API100 module APK into the bridge app's private storage,
-                then let the bridge entry load it with DexClassLoader.
+        val status = runCatching {
+            val assetName = assets.list ("")?.firstOrNull {
+                it.contains (".apk")
+            } ?: error ("assets 里没找到旧版 APK")
 
-                Current proof-of-concept target profile:
-                - entry: com.ss.android.ugc.awemes.ModuleMain
-                - minApiVersion: 100
-                - targetApiVersion: 100
-            """.trimIndent()
-            setPadding(48, 48, 48, 48)
+            val target = File (filesDir, "target-api100.apk")
+
+            assets.open (assetName).use {input ->
+                target.outputStream ().use { output ->
+                    input.copyTo (output)
+                }
+            }
+
+            buildString {
+                appendLine ("API101 Bridge Host")
+                appendLine ()
+                appendLine ("已导入旧模块：$assetName")
+                appendLine ("目标路径：${target.absolutePath}")
+                appendLine ("文件大小：${target.length ()} bytes")
+            }
+        }.getOrElse {e ->
+            buildString {
+                appendLine ("API101 Bridge Host")
+                appendLine ()
+                appendLine ("导入失败")
+                appendLine ("${e.javaClass.simpleName}: ${e.message}")
+            }
         }
-        setContentView(text)
+
+        setContentView (
+            TextView (this).apply {
+                text = status
+                setPadding (48, 48, 48, 48)
+            }
+        )
     }
 }
