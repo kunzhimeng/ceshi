@@ -1,0 +1,17 @@
+{
+  "targetPluginFileName": "target-api100.apk",
+  "entryClass": "com.ss.android.ugc.awemes.ModuleMain",
+  "minApiVersion": 100,
+  "targetApiVersion": 100,
+  "targetScope": [
+    "com.ss.android.ugc.aweme",
+    "com.ss.android.ugc.aweme.mobile",
+    "com.ss.android.ugc.aweme.lite",
+    "com.ss.android.spark",
+    "com.ss.android.yumme.video",
+    "com.ss.android.ugc.live",
+    "com.ss.android.ugc.aweme.hubble",
+    "my.maya.android",
+    "com.ss.android.ugc.livelite"
+  ]
+}
