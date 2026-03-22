@@ -1,3 +1,4 @@
 <resources>
-    <string name="app_name">API101 Bridge Host</string>
+    <string name="app_name">API101 Bridge</string>
+    <string name="app_description">API101 bridge host for API100 modern libxposed modules</string>
 </resources>
