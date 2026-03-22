@@ -1,16 +1,12 @@
 package com.aurfox.api101bridge.bridge
 
 import io.github.libxposed.api.XposedModule
-import java.lang.reflect.Method
+import java.lang.reflect.Executable
 import java.util.concurrent.ConcurrentHashMap
 
 data class HookRegistration(
     val pluginHookerClass: Class<*>,
-)
-
-data class BridgeInvocationContext(
-    val registration: HookRegistration? = null,
-    val pluginContext: Any? = null,
+    val pluginClassLoader: ClassLoader,
 )
 
 object BridgeHookRegistry {
@@ -18,22 +14,26 @@ object BridgeHookRegistry {
 
     fun register(
         hostModule: XposedModule,
-        hookedMethod: Method,
+        hookedExecutable: Executable,
         pluginHookerClass: Class<*>,
+        priority: Int? = null,
     ): Any? {
-        registrations[signature(hookedMethod)] = HookRegistration(pluginHookerClass)
+        registrations[signature(hookedExecutable)] = HookRegistration(
+            pluginHookerClass = pluginHookerClass,
+            pluginClassLoader = pluginHookerClass.classLoader,
+        )
         return null
     }
 
-    fun find(method: Method): HookRegistration? = registrations[signature(method)]
+    fun find(executable: Executable): HookRegistration? = registrations[signature(executable)]
 
-    private fun signature(method: Method): String {
+    private fun signature(executable: Executable): String {
         return buildString {
-            append(method.declaringClass.name)
+            append(executable.declaringClass.name)
             append('#')
-            append(method.name)
+            append(executable.name)
             append('(')
-            method.parameterTypes.joinTo(this, ",") { it.name }
+            executable.parameterTypes.joinTo(this, ",") { it.name }
             append(')')
         }
     }
