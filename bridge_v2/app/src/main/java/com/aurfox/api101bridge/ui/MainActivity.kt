@@ -23,7 +23,7 @@ class MainActivity : AppCompatActivity () {
             }
 
             buildString {
-                appendLine ("API101 Bridge Host")
+                appendLine ("API101 Bridge Host PROBE-0323-A")
                 appendLine ()
                 appendLine ("已导入旧模块：$assetName")
                 appendLine ("目标路径：${target.absolutePath}")
@@ -31,7 +31,7 @@ class MainActivity : AppCompatActivity () {
             }
         }.getOrElse {e ->
             buildString {
-                appendLine("API101 Bridge Host PROBE-0323-A")
+                appendLine ("API101 Bridge Host PROBE-0323-A")
                 appendLine ()
                 appendLine ("导入失败")
                 appendLine ("${e.javaClass.simpleName}: ${e.message}")
