@@ -1,6 +1,7 @@
 package com.aurfox.api101bridge.bridge
 
 import android.annotation.SuppressLint
+import android.util.Log
 import dalvik.system.DexClassLoader
 import io.github.libxposed.api.XposedModule
 import io.github.libxposed.api.XposedModuleInterface.ModuleLoadedParam
@@ -30,6 +31,7 @@ object BridgeRuntime {
     }
 
     fun dispatchPackageLoaded(param: PackageLoadedParam) {
+        Log.e("API101Bridge", "dispatchPackageLoaded start")
         val plugin = ensurePluginLoaded() ?: return
         val pluginPackageLoadedParam = plugin.classLoader.loadClass(ReflectionNames.PACKAGE_LOADED_PARAM)
         val pluginParam = PluginParamProxyFactory.create(pluginPackageLoadedParam, param)
@@ -41,11 +43,14 @@ object BridgeRuntime {
         loadedPluginRef.get()?.let { return it }
 
         val pluginApk = PluginStorage.getDefaultPluginFile(resolveHostDataDir())
+        Log.e("API101Bridge", "plugin path=" + pluginApk.absolutePath)
+        Log.e("API101Bridge", "plugin exists=" + pluginApk.isFile)
         if (!pluginApk.isFile) {
             return null
         }
 
         val info = PluginApkInspector.inspect(pluginApk)
+        Log.e("API101Bridge", "plugin entry=" + info.entryClass)
 
         val optimizedDir = File(resolveHostCacheDir(), "bridge_dex").apply { mkdirs() }
         val classLoader = DexClassLoader(
@@ -97,6 +102,7 @@ object BridgeRuntime {
         }
 
         if (ctor != null) {
+            Log.e("API101Bridge", "instantiating plugin via 2-arg ctor")
             return ctor.newInstance(interfaceProxy, moduleLoadedParamProxy)
         }
 
