@@ -11,6 +11,7 @@ import java.io.File
 import java.lang.reflect.Constructor
 import java.lang.reflect.Method
 import java.util.concurrent.atomic.AtomicReference
+import java.util.zip.ZipFile
 
 private data class LoadedPlugin(
     val info: TargetPluginInfo,
@@ -64,6 +65,8 @@ object BridgeRuntime {
                 hostPackage = HOST_PACKAGE,
             ) ?: return null
 
+            inspectMaterializedPlugin(pluginApk)
+
             val info = PluginApkInspector.inspect(pluginApk)
 
             val optimizedDir = File(currentContext.cacheDir, "bridge_dex").apply { mkdirs() }
@@ -108,6 +111,31 @@ object BridgeRuntime {
         }.getOrElse { e ->
             Log.e(TAG, "ensurePluginLoaded failed: ${e.javaClass.simpleName}: ${e.message}")
             null
+        }
+    }
+
+    private fun inspectMaterializedPlugin(pluginApk: File) {
+        runCatching {
+            ZipFile(pluginApk).use { zip ->
+                val javaInitEntry = zip.getEntry("META-INF/xposed/java_init.list")
+                Log.e(TAG, "inspect java_init exists=" + (javaInitEntry != null))
+
+                if (javaInitEntry != null) {
+                    val javaInit = zip.getInputStream(javaInitEntry).bufferedReader().use { it.readText() }
+                    Log.e(TAG, "inspect java_init content=" + javaInit.trim())
+                }
+
+                val dexEntry = zip.getEntry("classes.dex")
+                Log.e(TAG, "inspect classes.dex exists=" + (dexEntry != null))
+
+                if (dexEntry != null) {
+                    val dexBytes = zip.getInputStream(dexEntry).use { it.readBytes() }
+                    val hit = dexBytes.indexOfSlice("com/ss/android/ugc/awemes/ModuleMain".toByteArray()) >= 0
+                    Log.e(TAG, "inspect ModuleMain string exists=" + hit)
+                }
+            }
+        }.onFailure { e ->
+            Log.e(TAG, "inspectMaterializedPlugin failed: ${e.javaClass.simpleName}: ${e.message}")
         }
     }
 
