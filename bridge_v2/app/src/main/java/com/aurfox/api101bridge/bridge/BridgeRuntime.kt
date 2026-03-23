@@ -13,7 +13,6 @@ import java.lang.reflect.Constructor
 import java.lang.reflect.Method
 import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicReference
-import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
 
 private data class LoadedPlugin(
@@ -24,7 +23,7 @@ private data class LoadedPlugin(
 )
 
 object BridgeRuntime {
-    private const val TAG = "API101BridgeV2"
+    private const val TAG = "API101BridgeD777"
     private const val HOST_PACKAGE = "com.aurfox.api101bridge"
 
     private lateinit var hostModule: XposedModule
@@ -37,7 +36,7 @@ object BridgeRuntime {
     }
 
     fun dispatchPackageLoaded(param: PackageLoadedParam) {
-        Log.e(TAG, "dispatchPackageLoaded start PROBE-0323-C")
+        Log.e(TAG, "dispatchPackageLoaded start PROBE-0323-D-UNIQUE-777")
 
         val plugin = ensurePluginLoaded() ?: run {
             Log.e(TAG, "ensurePluginLoaded returned null")
