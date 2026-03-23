@@ -34,7 +34,7 @@ private data class LoaderResult(
 )
 
 object BridgeRuntime {
-    private const val TAG = "API101BridgeKF777"
+    private const val TAG = "API101BridgeKEF888"
     private const val HOST_PACKAGE = "com.aurfox.api101bridge"
 
     private lateinit var hostModule: XposedModule
@@ -53,7 +53,7 @@ object BridgeRuntime {
 
     @JvmStatic
     fun dispatchPackageLoaded(param: PackageLoadedParam) {
-        Log.e(TAG, "PROBE-0323-KF-MERGED-777")
+        Log.e(TAG, "PROBE-0323-KEF-PROBE-888")
         val loaded = ensureLoaded() ?: run {
             Log.e(TAG, "ensureLoaded returned null")
             return
@@ -77,10 +77,15 @@ object BridgeRuntime {
                 ?: error("materialized outer apk null")
             Log.e(TAG, "outerApk=" + outerApk.absolutePath)
 
+            inspectDexFileClasses(outerApk, "outer")
+
             val candidate = resolveCandidate(outerApk, ctx)
             Log.e(TAG, "selected candidate label=" + candidate.label)
             Log.e(TAG, "selected candidate apk=" + candidate.apk.absolutePath)
             Log.e(TAG, "selected candidate entry=" + candidate.entry)
+
+            inspectDexFileClasses(candidate.apk, candidate.label)
+            probeDexLoadClass(candidate.apk, candidate.entry, candidate.label)
 
             val loaderResult = loadEntryClassWithStrategies(candidate.apk, candidate.entry, ctx)
             Log.e(TAG, "entry load strategy=" + loaderResult.strategy)
@@ -256,6 +261,39 @@ object BridgeRuntime {
         return when (name) {
             "classes.dex" -> 1
             else -> name.removePrefix("classes").removeSuffix(".dex").toIntOrNull() ?: Int.MAX_VALUE
+        }
+    }
+
+    private fun inspectDexFileClasses(apk: File, label: String) {
+        runCatching {
+            val dexFile = DexFile(apk.absolutePath)
+            val e = dexFile.entries()
+            val all = mutableListOf<String>()
+            while (e.hasMoreElements()) {
+                all += e.nextElement()
+            }
+            dexFile.close()
+
+            Log.e(TAG, "dexfile[$label] class count=" + all.size)
+            Log.e(TAG, "dexfile[$label] ModuleMain class exists=" + all.contains("com.ss.android.ugc.awemes.ModuleMain"))
+            val awemes = all.filter { it.startsWith("com.ss.android.ugc.awemes") }.sorted().take(80)
+            Log.e(TAG, "dexfile[$label] awemes sample=" + awemes.joinToString())
+        }.onFailure {
+            Log.e(TAG, "inspectDexFileClasses[$label] failed: ${it.javaClass.simpleName}: ${it.message}")
+        }
+    }
+
+    private fun probeDexLoadClass(apk: File, className: String, label: String) {
+        runCatching {
+            val dexFile = DexFile(apk.absolutePath)
+            val method = dexFile.javaClass.methods.firstOrNull {
+                it.name == "loadClass" && it.parameterCount == 2
+            } ?: error("DexFile.loadClass(String, ClassLoader) not found")
+            val result = method.invoke(dexFile, className, hostModule.javaClass.classLoader)
+            Log.e(TAG, "dexfile[$label] reflective loadClass result=" + result)
+            dexFile.close()
+        }.onFailure {
+            Log.e(TAG, "probeDexLoadClass[$label] failed: ${it.javaClass.simpleName}: ${it.message}")
         }
     }
 
