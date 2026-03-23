@@ -8,7 +8,9 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(TextView(this).apply {
-            text = "API101 Bridge Host PROBE-0323-I-HOST-CLASSLOADER-444"
+            text = "API101 Bridge Host PROBE-0323-I-HOST-CLASSLOADER-444 FINAL"
+            textSize = 18f
+            setPadding(48, 48, 48, 48)
         })
     }
 }
