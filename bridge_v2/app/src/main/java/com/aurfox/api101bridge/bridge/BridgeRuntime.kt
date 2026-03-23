@@ -31,7 +31,7 @@ private data class LoaderResult(
 )
 
 object BridgeRuntime {
-    private const val TAG = "API101BridgeF111"
+    private const val TAG = "API101BridgeG222"
     private const val HOST_PACKAGE = "com.aurfox.api101bridge"
 
     private lateinit var hostModule: XposedModule
@@ -44,7 +44,7 @@ object BridgeRuntime {
     }
 
     fun dispatchPackageLoaded(param: PackageLoadedParam) {
-        Log.e(TAG, "dispatchPackageLoaded start PROBE-0323-F-LOADER-111")
+        Log.e(TAG, "dispatchPackageLoaded start PROBE-0323-G-SCAN-222")
 
         val plugin = ensurePluginLoaded() ?: run {
             Log.e(TAG, "ensurePluginLoaded returned null")
@@ -77,12 +77,12 @@ object BridgeRuntime {
 
             inspectMaterializedPlugin(pluginApk)
             inspectDexFileClasses(pluginApk)
+            inspectHiddenCodeContainers(pluginApk)
 
             val info = PluginApkInspector.inspect(pluginApk)
             val loaderResult = loadEntryClassWithStrategies(pluginApk, info.entryClass, currentContext)
 
             Log.e(TAG, "entry load strategy=" + loaderResult.strategy)
-            Log.e(TAG, "loading plugin api classes using same loader")
 
             val pluginInterface = loaderResult.classLoader.loadClass(ReflectionNames.XPOSED_INTERFACE)
             val pluginModuleLoadedParam = loaderResult.classLoader.loadClass(ReflectionNames.MODULE_LOADED_PARAM)
@@ -235,6 +235,50 @@ object BridgeRuntime {
             Log.e(TAG, "dexfile awemes sample=" + awemes.joinToString())
         }.onFailure { e ->
             Log.e(TAG, "inspectDexFileClasses failed: ${e.javaClass.simpleName}: ${e.message}")
+        }
+    }
+
+    private fun inspectHiddenCodeContainers(pluginApk: File) {
+        runCatching {
+            ZipFile(pluginApk).use { zip ->
+                val assetDex = mutableListOf<String>()
+                val assetApk = mutableListOf<String>()
+                val assetJar = mutableListOf<String>()
+                val nativeSo = mutableListOf<String>()
+                val suspicious = mutableListOf<String>()
+
+                val entries = zip.entries()
+                while (entries.hasMoreElements()) {
+                    val entry = entries.nextElement()
+                    if (entry.isDirectory) continue
+                    val name = entry.name
+
+                    when {
+                        name.startsWith("assets/") && name.endsWith(".dex") -> assetDex += name
+                        name.startsWith("assets/") && name.endsWith(".apk") -> assetApk += name
+                        name.startsWith("assets/") && name.endsWith(".jar") -> assetJar += name
+                        name.startsWith("lib/") && name.endsWith(".so") -> nativeSo += name
+                    }
+
+                    if (
+                        name.contains("dex", ignoreCase = true) ||
+                        name.contains("plugin", ignoreCase = true) ||
+                        name.contains("module", ignoreCase = true) ||
+                        name.contains("load", ignoreCase = true) ||
+                        name.contains("hook", ignoreCase = true)
+                    ) {
+                        suspicious += name
+                    }
+                }
+
+                Log.e(TAG, "hidden asset dex=" + assetDex.joinToString())
+                Log.e(TAG, "hidden asset apk=" + assetApk.joinToString())
+                Log.e(TAG, "hidden asset jar=" + assetJar.joinToString())
+                Log.e(TAG, "hidden native so=" + nativeSo.joinToString())
+                Log.e(TAG, "hidden suspicious entries=" + suspicious.take(100).joinToString())
+            }
+        }.onFailure { e ->
+            Log.e(TAG, "inspectHiddenCodeContainers failed: ${e.javaClass.simpleName}: ${e.message}")
         }
     }
 
