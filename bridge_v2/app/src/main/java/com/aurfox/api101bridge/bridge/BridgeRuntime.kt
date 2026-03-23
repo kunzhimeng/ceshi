@@ -13,6 +13,7 @@ import java.lang.reflect.Constructor
 import java.lang.reflect.Method
 import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicReference
+import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
 
 private data class LoadedPlugin(
@@ -36,7 +37,7 @@ object BridgeRuntime {
     }
 
     fun dispatchPackageLoaded(param: PackageLoadedParam) {
-        Log.e(TAG, "dispatchPackageLoaded start PROBE-0323-B")
+        Log.e(TAG, "dispatchPackageLoaded start PROBE-0323-C")
 
         val plugin = ensurePluginLoaded() ?: run {
             Log.e(TAG, "ensurePluginLoaded returned null")
@@ -72,6 +73,7 @@ object BridgeRuntime {
             val info = PluginApkInspector.inspect(pluginApk)
             val classLoader = createPluginClassLoader(pluginApk, currentContext)
 
+            Log.e(TAG, "loading entryClass=" + info.entryClass)
             val entryClass = classLoader.loadClass(info.entryClass)
             val pluginInterface = classLoader.loadClass(ReflectionNames.XPOSED_INTERFACE)
             val pluginModuleLoadedParam = classLoader.loadClass(ReflectionNames.MODULE_LOADED_PARAM)
@@ -110,12 +112,9 @@ object BridgeRuntime {
 
     private fun createPluginClassLoader(pluginApk: File, currentContext: Context): ClassLoader {
         return runCatching {
-            ZipFile(pluginApk).use { zip ->
-                val dexEntry = zip.getEntry("classes.dex") ?: error("classes.dex missing")
-                val dexBytes = zip.getInputStream(dexEntry).use { it.readBytes() }
-                Log.e(TAG, "creating InMemoryDexClassLoader, dexSize=" + dexBytes.size)
-                InMemoryDexClassLoader(ByteBuffer.wrap(dexBytes), hostModule.javaClass.classLoader)
-            }
+            val buffers = readAllDexBuffers(pluginApk)
+            Log.e(TAG, "creating InMemoryDexClassLoader, dexCount=" + buffers.size)
+            InMemoryDexClassLoader(buffers.toTypedArray(), hostModule.javaClass.classLoader)
         }.getOrElse { e ->
             Log.e(TAG, "InMemoryDexClassLoader failed: ${e.javaClass.simpleName}: ${e.message}")
             val optimizedDir = File(currentContext.cacheDir, "bridge_dex").apply { mkdirs() }
@@ -126,6 +125,30 @@ object BridgeRuntime {
                 pluginApk.parentFile?.absolutePath,
                 hostModule.javaClass.classLoader,
             )
+        }
+    }
+
+    private fun readAllDexBuffers(pluginApk: File): List<ByteBuffer> {
+        return ZipFile(pluginApk).use { zip ->
+            val dexEntries = zip.entries().asSequence()
+                .filter { !it.isDirectory && it.name.matches(Regex("classes(\\d*)\\.dex")) }
+                .sortedBy { dexOrder(it.name) }
+                .toList()
+
+            Log.e(TAG, "dex entries=" + dexEntries.joinToString { it.name })
+
+            dexEntries.map { entry ->
+                val bytes = zip.getInputStream(entry).use { it.readBytes() }
+                Log.e(TAG, "dex entry ${entry.name} size=" + bytes.size)
+                ByteBuffer.wrap(bytes)
+            }
+        }
+    }
+
+    private fun dexOrder(name: String): Int {
+        return when (name) {
+            "classes.dex" -> 1
+            else -> name.removePrefix("classes").removeSuffix(".dex").toIntOrNull() ?: Int.MAX_VALUE
         }
     }
 
@@ -140,14 +163,19 @@ object BridgeRuntime {
                     Log.e(TAG, "inspect java_init content=" + javaInit.trim())
                 }
 
-                val dexEntry = zip.getEntry("classes.dex")
-                Log.e(TAG, "inspect classes.dex exists=" + (dexEntry != null))
+                val dexEntries = zip.entries().asSequence()
+                    .filter { !it.isDirectory && it.name.matches(Regex("classes(\\d*)\\.dex")) }
+                    .sortedBy { dexOrder(it.name) }
+                    .toList()
 
-                if (dexEntry != null) {
+                Log.e(TAG, "inspect dex entry count=" + dexEntries.size)
+                Log.e(TAG, "inspect dex entries=" + dexEntries.joinToString { it.name })
+
+                dexEntries.forEach { dexEntry ->
                     val dexBytes = zip.getInputStream(dexEntry).use { it.readBytes() }
                     val hit = dexBytes.toString(Charsets.ISO_8859_1)
                         .contains("com/ss/android/ugc/awemes/ModuleMain")
-                    Log.e(TAG, "inspect ModuleMain string exists=" + hit)
+                    Log.e(TAG, "inspect ${dexEntry.name} ModuleMain string exists=" + hit)
                 }
             }
         }.onFailure { e ->
