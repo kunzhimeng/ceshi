@@ -4,11 +4,14 @@ import android.content.Context
 import android.util.Log
 import dalvik.system.DexClassLoader
 import dalvik.system.DexFile
+import dalvik.system.InMemoryDexClassLoader
+import dalvik.system.PathClassLoader
 import io.github.libxposed.api.XposedModule
 import io.github.libxposed.api.XposedModuleInterface.ModuleLoadedParam
 import io.github.libxposed.api.XposedModuleInterface.PackageLoadedParam
 import java.io.File
 import java.lang.reflect.Method
+import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicReference
 import java.util.zip.ZipFile
 
@@ -24,8 +27,14 @@ private data class Candidate(
     val label: String,
 )
 
+private data class LoaderResult(
+    val classLoader: ClassLoader,
+    val entryClass: Class<*>,
+    val strategy: String,
+)
+
 object BridgeRuntime {
-    private const val TAG = "API101BridgeK666"
+    private const val TAG = "API101BridgeKF777"
     private const val HOST_PACKAGE = "com.aurfox.api101bridge"
 
     private lateinit var hostModule: XposedModule
@@ -44,7 +53,7 @@ object BridgeRuntime {
 
     @JvmStatic
     fun dispatchPackageLoaded(param: PackageLoadedParam) {
-        Log.e(TAG, "PROBE-0323-K-INNER-AUTO-666")
+        Log.e(TAG, "PROBE-0323-KF-MERGED-777")
         val loaded = ensureLoaded() ?: run {
             Log.e(TAG, "ensureLoaded returned null")
             return
@@ -73,35 +82,31 @@ object BridgeRuntime {
             Log.e(TAG, "selected candidate apk=" + candidate.apk.absolutePath)
             Log.e(TAG, "selected candidate entry=" + candidate.entry)
 
-            val loader = DexClassLoader(
-                candidate.apk.absolutePath,
-                File(ctx.cacheDir, "bridge_dex").apply { mkdirs() }.absolutePath,
-                candidate.apk.parentFile?.absolutePath,
-                hostModule.javaClass.classLoader,
-            )
+            val loaderResult = loadEntryClassWithStrategies(candidate.apk, candidate.entry, ctx)
+            Log.e(TAG, "entry load strategy=" + loaderResult.strategy)
 
-            val entryClass = loader.loadClass(candidate.entry)
-            Log.e(TAG, "entry loaded=" + entryClass.name)
-
-            val pluginInterface = loader.loadClass(ReflectionNames.XPOSED_INTERFACE)
-            val pluginModuleLoadedParam = loader.loadClass(ReflectionNames.MODULE_LOADED_PARAM)
+            val pluginInterface = loaderResult.classLoader.loadClass(ReflectionNames.XPOSED_INTERFACE)
+            val pluginModuleLoadedParam = loaderResult.classLoader.loadClass(ReflectionNames.MODULE_LOADED_PARAM)
             val interfaceProxy = Api100InterfaceProxy.create(pluginInterface, hostModule)
             val moduleLoadedParamProxy = PluginParamProxyFactory.create(
                 pluginModuleLoadedParam,
                 hostModuleLoadedParam,
             )
 
-            val ctor = entryClass.constructors.firstOrNull {
+            val ctor = loaderResult.entryClass.constructors.firstOrNull {
                 it.parameterTypes.size == 2 &&
                     it.parameterTypes[0].name == pluginInterface.name &&
                     it.parameterTypes[1].name == pluginModuleLoadedParam.name
             } ?: error("no 2-arg constructor")
+
             val entryInstance = ctor.newInstance(interfaceProxy, moduleLoadedParamProxy)
-            val onPackageLoaded = entryClass.methods.firstOrNull {
+            val onPackageLoaded = loaderResult.entryClass.methods.firstOrNull {
                 it.name == "onPackageLoaded" && it.parameterTypes.size == 1
             }
 
-            LoadedPlugin(loader, entryInstance, onPackageLoaded).also { loadedRef.set(it) }
+            LoadedPlugin(loaderResult.classLoader, entryInstance, onPackageLoaded).also {
+                loadedRef.set(it)
+            }
         }.getOrElse {
             Log.e(TAG, "ensureLoaded failed: ${it.javaClass.simpleName}: ${it.message}")
             null
@@ -131,6 +136,51 @@ object BridgeRuntime {
         }
 
         error("no valid outer/inner candidate")
+    }
+
+    private fun loadEntryClassWithStrategies(
+        pluginApk: File,
+        entryClassName: String,
+        ctx: Context,
+    ): LoaderResult {
+        val parent = hostModule.javaClass.classLoader
+
+        runCatching {
+            Log.e(TAG, "trying PathClassLoader")
+            val loader = PathClassLoader(pluginApk.absolutePath, parent)
+            val entryClass = loader.loadClass(entryClassName)
+            return LoaderResult(loader, entryClass, "PathClassLoader")
+        }.onFailure {
+            Log.e(TAG, "PathClassLoader failed: ${it.javaClass.simpleName}: ${it.message}")
+        }
+
+        runCatching {
+            Log.e(TAG, "trying InMemoryDexClassLoader")
+            val buffers = readAllDexBuffers(pluginApk)
+            Log.e(TAG, "creating InMemoryDexClassLoader, dexCount=" + buffers.size)
+            val loader = InMemoryDexClassLoader(buffers.toTypedArray(), parent)
+            val entryClass = loader.loadClass(entryClassName)
+            return LoaderResult(loader, entryClass, "InMemoryDexClassLoader")
+        }.onFailure {
+            Log.e(TAG, "InMemoryDexClassLoader failed: ${it.javaClass.simpleName}: ${it.message}")
+        }
+
+        runCatching {
+            Log.e(TAG, "trying DexClassLoader")
+            val optimizedDir = File(ctx.cacheDir, "bridge_dex").apply { mkdirs() }
+            val loader = DexClassLoader(
+                pluginApk.absolutePath,
+                optimizedDir.absolutePath,
+                pluginApk.parentFile?.absolutePath,
+                parent,
+            )
+            val entryClass = loader.loadClass(entryClassName)
+            return LoaderResult(loader, entryClass, "DexClassLoader")
+        }.onFailure {
+            Log.e(TAG, "DexClassLoader failed: ${it.javaClass.simpleName}: ${it.message}")
+        }
+
+        error("all loader strategies failed for $entryClassName")
     }
 
     private fun extractInnerApks(outerApk: File, ctx: Context): List<File> {
@@ -184,6 +234,28 @@ object BridgeRuntime {
         }.getOrElse {
             Log.e(TAG, "hasDexClass failed: ${it.javaClass.simpleName}: ${it.message}")
             false
+        }
+    }
+
+    private fun readAllDexBuffers(apk: File): List<ByteBuffer> {
+        return ZipFile(apk).use { zip ->
+            val dexEntries = zip.entries().asSequence()
+                .filter { !it.isDirectory && it.name.matches(Regex("classes(\\d*)\\.dex")) }
+                .sortedBy { dexOrder(it.name) }
+                .toList()
+            Log.e(TAG, "dex entries=" + dexEntries.joinToString { it.name })
+            dexEntries.map { entry ->
+                val bytes = zip.getInputStream(entry).use { it.readBytes() }
+                Log.e(TAG, "dex entry ${entry.name} size=" + bytes.size)
+                ByteBuffer.wrap(bytes)
+            }
+        }
+    }
+
+    private fun dexOrder(name: String): Int {
+        return when (name) {
+            "classes.dex" -> 1
+            else -> name.removePrefix("classes").removeSuffix(".dex").toIntOrNull() ?: Int.MAX_VALUE
         }
     }
 
