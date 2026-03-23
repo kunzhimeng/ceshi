@@ -1,6 +1,7 @@
 package com.aurfox.api101bridge.bridge
 
 import android.annotation.SuppressLint
+import android.content.Context
 import android.util.Log
 import dalvik.system.DexClassLoader
 import io.github.libxposed.api.XposedModule
@@ -19,6 +20,7 @@ private data class LoadedPlugin(
 )
 
 object BridgeRuntime {
+    private const val TAG = "API101BridgeV2"
     private const val HOST_PACKAGE = "com.aurfox.api101bridge"
 
     private lateinit var hostModule: XposedModule
@@ -31,59 +33,81 @@ object BridgeRuntime {
     }
 
     fun dispatchPackageLoaded(param: PackageLoadedParam) {
-        Log.e("API101BridgeV2", "dispatchPackageLoaded start PROBE-0323-A")
-        val plugin = ensurePluginLoaded() ?: return
-        val pluginPackageLoadedParam = plugin.classLoader.loadClass(ReflectionNames.PACKAGE_LOADED_PARAM)
-        val pluginParam = PluginParamProxyFactory.create(pluginPackageLoadedParam, param)
-        plugin.onPackageLoaded?.invoke(plugin.entryInstance, pluginParam)
+        Log.e(TAG, "dispatchPackageLoaded start PROBE-0323-A")
+
+        val plugin = ensurePluginLoaded() ?: run {
+            Log.e(TAG, "ensurePluginLoaded returned null")
+            return
+        }
+
+        runCatching {
+            val pluginPackageLoadedParam = plugin.classLoader.loadClass(ReflectionNames.PACKAGE_LOADED_PARAM)
+            val pluginParam = PluginParamProxyFactory.create(pluginPackageLoadedParam, param)
+
+            Log.e(TAG, "about to invoke legacy onPackageLoaded")
+            plugin.onPackageLoaded?.invoke(plugin.entryInstance, pluginParam)
+            Log.e(TAG, "legacy onPackageLoaded invoked")
+        }.onFailure { e ->
+            Log.e(TAG, "dispatchPackageLoaded failed: ${e.javaClass.simpleName}: ${e.message}")
+        }
     }
 
     @SuppressLint("UnsafeDynamicallyLoadedCode")
     private fun ensurePluginLoaded(): LoadedPlugin? {
         loadedPluginRef.get()?.let { return it }
 
-        val pluginApk = PluginStorage.getDefaultPluginFile(resolveHostDataDir())
-        Log.e("API101BridgeV2", "plugin path=" + pluginApk.absolutePath)
-        Log.e("API101BridgeV2", "plugin exists=" + pluginApk.isFile)
-        if (!pluginApk.isFile) {
-            return null
-        }
+        return runCatching {
+            val currentContext = currentApplicationContext()
 
-        val info = PluginApkInspector.inspect(pluginApk)
+            val pluginApk = PluginStorage.materializeBundledPlugin(
+                currentContext = currentContext,
+                hostPackage = HOST_PACKAGE,
+            ) ?: return null
 
-        val optimizedDir = File(resolveHostCacheDir(), "bridge_dex").apply { mkdirs() }
-        val classLoader = DexClassLoader(
-            info.apk.absolutePath,
-            optimizedDir.absolutePath,
-            info.apk.parentFile?.absolutePath,
-            hostModule.javaClass.classLoader,
-        )
+            val info = PluginApkInspector.inspect(pluginApk)
 
-        val entryClass = classLoader.loadClass(info.entryClass)
-        val pluginInterface = classLoader.loadClass(ReflectionNames.XPOSED_INTERFACE)
-        val pluginModuleLoadedParam = classLoader.loadClass(ReflectionNames.MODULE_LOADED_PARAM)
-        val interfaceProxy = Api100InterfaceProxy.create(pluginInterface, hostModule)
-        val moduleLoadedParamProxy = PluginParamProxyFactory.create(pluginModuleLoadedParam, hostModuleLoadedParam)
+            val optimizedDir = File(currentContext.cacheDir, "bridge_dex").apply { mkdirs() }
 
-        val entryInstance = instantiateEntry(
-            entryClass,
-            pluginInterface,
-            pluginModuleLoadedParam,
-            interfaceProxy,
-            moduleLoadedParamProxy,
-        )
+            val classLoader = DexClassLoader(
+                info.apk.absolutePath,
+                optimizedDir.absolutePath,
+                info.apk.parentFile?.absolutePath,
+                hostModule.javaClass.classLoader,
+            )
 
-        val onPackageLoaded = entryClass.methods.firstOrNull {
-            it.name == "onPackageLoaded" && it.parameterTypes.size == 1
-        }
+            val entryClass = classLoader.loadClass(info.entryClass)
+            val pluginInterface = classLoader.loadClass(ReflectionNames.XPOSED_INTERFACE)
+            val pluginModuleLoadedParam = classLoader.loadClass(ReflectionNames.MODULE_LOADED_PARAM)
 
-        return LoadedPlugin(
-            info = info,
-            classLoader = classLoader,
-            entryInstance = entryInstance,
-            onPackageLoaded = onPackageLoaded,
-        ).also {
-            loadedPluginRef.set(it)
+            val interfaceProxy = Api100InterfaceProxy.create(pluginInterface, hostModule)
+            val moduleLoadedParamProxy = PluginParamProxyFactory.create(
+                pluginModuleLoadedParam,
+                hostModuleLoadedParam,
+            )
+
+            val entryInstance = instantiateEntry(
+                entryClass = entryClass,
+                pluginInterface = pluginInterface,
+                pluginModuleLoadedParam = pluginModuleLoadedParam,
+                interfaceProxy = interfaceProxy,
+                moduleLoadedParamProxy = moduleLoadedParamProxy,
+            )
+
+            val onPackageLoaded = entryClass.methods.firstOrNull {
+                it.name == "onPackageLoaded" && it.parameterTypes.size == 1
+            }
+
+            LoadedPlugin(
+                info = info,
+                classLoader = classLoader,
+                entryInstance = entryInstance,
+                onPackageLoaded = onPackageLoaded,
+            ).also {
+                loadedPluginRef.set(it)
+            }
+        }.getOrElse { e ->
+            Log.e(TAG, "ensurePluginLoaded failed: ${e.javaClass.simpleName}: ${e.message}")
+            null
         }
     }
 
@@ -101,11 +125,14 @@ object BridgeRuntime {
         }
 
         if (ctor != null) {
+            Log.e(TAG, "instantiating legacy entry with 2-arg constructor")
             return ctor.newInstance(interfaceProxy, moduleLoadedParamProxy)
         }
 
         val noArg = entryClass.constructors.firstOrNull { it.parameterTypes.isEmpty() }
             ?: error("No supported constructor found for ${entryClass.name}")
+
+        Log.e(TAG, "instantiating legacy entry with no-arg constructor")
 
         val instance = noArg.newInstance()
 
@@ -122,11 +149,10 @@ object BridgeRuntime {
         return instance
     }
 
-    private fun resolveHostDataDir(): String {
-        return "/data/user/0/$HOST_PACKAGE"
-    }
-
-    private fun resolveHostCacheDir(): File {
-        return File(resolveHostDataDir(), "cache")
+    private fun currentApplicationContext(): Context {
+        val activityThreadClass = Class.forName("android.app.ActivityThread")
+        val currentApplicationMethod = activityThreadClass.getDeclaredMethod("currentApplication")
+        val app = currentApplicationMethod.invoke(null) as? Context
+        return app ?: error("ActivityThread.currentApplication() returned null")
     }
 }
