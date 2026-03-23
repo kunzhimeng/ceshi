@@ -30,8 +30,14 @@ private data class LoaderResult(
     val strategy: String,
 )
 
+private data class PluginCandidate(
+    val sourceApk: File,
+    val entryClassName: String,
+    val label: String,
+)
+
 object BridgeRuntime {
-    private const val TAG = "API101BridgeG222"
+    private const val TAG = "API101BridgeH333"
     private const val HOST_PACKAGE = "com.aurfox.api101bridge"
 
     private lateinit var hostModule: XposedModule
@@ -44,7 +50,7 @@ object BridgeRuntime {
     }
 
     fun dispatchPackageLoaded(param: PackageLoadedParam) {
-        Log.e(TAG, "dispatchPackageLoaded start PROBE-0323-G-SCAN-222")
+        Log.e(TAG, "dispatchPackageLoaded start PROBE-0323-H-INNER-APK-333")
 
         val plugin = ensurePluginLoaded() ?: run {
             Log.e(TAG, "ensurePluginLoaded returned null")
@@ -70,17 +76,28 @@ object BridgeRuntime {
         return runCatching {
             val currentContext = currentApplicationContext()
 
-            val pluginApk = PluginStorage.materializeBundledPlugin(
+            val outerApk = PluginStorage.materializeBundledPlugin(
                 currentContext = currentContext,
                 hostPackage = HOST_PACKAGE,
             ) ?: return null
 
-            inspectMaterializedPlugin(pluginApk)
-            inspectDexFileClasses(pluginApk)
-            inspectHiddenCodeContainers(pluginApk)
+            inspectMaterializedPlugin(outerApk, "outer")
+            inspectDexFileClasses(outerApk, "outer")
+            inspectHiddenCodeContainers(outerApk)
 
-            val info = PluginApkInspector.inspect(pluginApk)
-            val loaderResult = loadEntryClassWithStrategies(pluginApk, info.entryClass, currentContext)
+            val candidate = resolveActualPluginCandidate(outerApk, currentContext)
+            Log.e(TAG, "selected candidate label=" + candidate.label)
+            Log.e(TAG, "selected candidate path=" + candidate.sourceApk.absolutePath)
+            Log.e(TAG, "selected candidate entry=" + candidate.entryClassName)
+
+            inspectMaterializedPlugin(candidate.sourceApk, candidate.label)
+            inspectDexFileClasses(candidate.sourceApk, candidate.label)
+
+            val loaderResult = loadEntryClassWithStrategies(
+                pluginApk = candidate.sourceApk,
+                entryClassName = candidate.entryClassName,
+                currentContext = currentContext,
+            )
 
             Log.e(TAG, "entry load strategy=" + loaderResult.strategy)
 
@@ -106,7 +123,7 @@ object BridgeRuntime {
             }
 
             LoadedPlugin(
-                info = info,
+                info = TargetPluginInfo(candidate.sourceApk, candidate.entryClassName),
                 classLoader = loaderResult.classLoader,
                 entryInstance = entryInstance,
                 onPackageLoaded = onPackageLoaded,
@@ -116,6 +133,101 @@ object BridgeRuntime {
         }.getOrElse { e ->
             Log.e(TAG, "ensurePluginLoaded failed: ${e.javaClass.simpleName}: ${e.message}")
             null
+        }
+    }
+
+    private fun resolveActualPluginCandidate(outerApk: File, currentContext: Context): PluginCandidate {
+        val outerEntry = readJavaInit(outerApk)
+        val outerHasClass = hasDexClass(outerApk, outerEntry)
+        Log.e(TAG, "outer entry=" + outerEntry)
+        Log.e(TAG, "outer entry class exists=" + outerHasClass)
+
+        if (outerEntry != null && outerHasClass) {
+            return PluginCandidate(outerApk, outerEntry, "outer")
+        }
+
+        val innerApks = extractInnerApks(outerApk, currentContext)
+        Log.e(TAG, "inner apk count=" + innerApks.size)
+
+        innerApks.forEach { inner ->
+            val entry = readJavaInit(inner)
+            val hasClass = hasDexClass(inner, entry)
+            Log.e(TAG, "inner apk path=" + inner.absolutePath)
+            Log.e(TAG, "inner entry=" + entry)
+            Log.e(TAG, "inner entry class exists=" + hasClass)
+            if (entry != null && hasClass) {
+                return PluginCandidate(inner, entry, "inner")
+            }
+        }
+
+        return PluginCandidate(
+            sourceApk = outerApk,
+            entryClassName = outerEntry ?: "com.ss.android.ugc.awemes.ModuleMain",
+            label = "outer-fallback",
+        )
+    }
+
+    private fun extractInnerApks(outerApk: File, currentContext: Context): List<File> {
+        return runCatching {
+            val outDir = File(currentContext.cacheDir, "bridge_inner_apk").apply { mkdirs() }
+            val extracted = mutableListOf<File>()
+
+            ZipFile(outerApk).use { zip ->
+                val entries = zip.entries()
+                while (entries.hasMoreElements()) {
+                    val entry = entries.nextElement()
+                    if (entry.isDirectory) continue
+                    val name = entry.name
+                    if (name.startsWith("assets/") && name.endsWith(".apk")) {
+                        val safeName = name.removePrefix("assets/").replace("/", "_")
+                        val outFile = File(outDir, safeName)
+                        zip.getInputStream(entry).use { input ->
+                            outFile.outputStream().use { output ->
+                                input.copyTo(output)
+                            }
+                        }
+                        Log.e(TAG, "extracted inner apk=" + outFile.absolutePath)
+                        extracted += outFile
+                    }
+                }
+            }
+
+            extracted
+        }.getOrElse { e ->
+            Log.e(TAG, "extractInnerApks failed: ${e.javaClass.simpleName}: ${e.message}")
+            emptyList()
+        }
+    }
+
+    private fun readJavaInit(pluginApk: File): String? {
+        return runCatching {
+            ZipFile(pluginApk).use { zip ->
+                val entry = zip.getEntry("META-INF/xposed/java_init.list") ?: return null
+                zip.getInputStream(entry).bufferedReader().use { it.readText().trim().lineSequence().firstOrNull()?.trim() }
+            }
+        }.getOrElse {
+            Log.e(TAG, "readJavaInit failed: ${it.javaClass.simpleName}: ${it.message}")
+            null
+        }
+    }
+
+    private fun hasDexClass(pluginApk: File, className: String?): Boolean {
+        if (className.isNullOrBlank()) return false
+        return runCatching {
+            val dexFile = DexFile(pluginApk.absolutePath)
+            val entries = dexFile.entries()
+            var found = false
+            while (entries.hasMoreElements()) {
+                if (entries.nextElement() == className) {
+                    found = true
+                    break
+                }
+            }
+            dexFile.close()
+            found
+        }.getOrElse {
+            Log.e(TAG, "hasDexClass failed: ${it.javaClass.simpleName}: ${it.message}")
+            false
         }
     }
 
@@ -188,15 +300,15 @@ object BridgeRuntime {
         }
     }
 
-    private fun inspectMaterializedPlugin(pluginApk: File) {
+    private fun inspectMaterializedPlugin(pluginApk: File, label: String) {
         runCatching {
             ZipFile(pluginApk).use { zip ->
                 val javaInitEntry = zip.getEntry("META-INF/xposed/java_init.list")
-                Log.e(TAG, "inspect java_init exists=" + (javaInitEntry != null))
+                Log.e(TAG, "inspect[$label] java_init exists=" + (javaInitEntry != null))
 
                 if (javaInitEntry != null) {
                     val javaInit = zip.getInputStream(javaInitEntry).bufferedReader().use { it.readText() }
-                    Log.e(TAG, "inspect java_init content=" + javaInit.trim())
+                    Log.e(TAG, "inspect[$label] java_init content=" + javaInit.trim())
                 }
 
                 val dexEntries = zip.entries().asSequence()
@@ -204,22 +316,22 @@ object BridgeRuntime {
                     .sortedBy { dexOrder(it.name) }
                     .toList()
 
-                Log.e(TAG, "inspect dex entry count=" + dexEntries.size)
-                Log.e(TAG, "inspect dex entries=" + dexEntries.joinToString { it.name })
+                Log.e(TAG, "inspect[$label] dex entry count=" + dexEntries.size)
+                Log.e(TAG, "inspect[$label] dex entries=" + dexEntries.joinToString { it.name })
 
                 dexEntries.forEach { dexEntry ->
                     val dexBytes = zip.getInputStream(dexEntry).use { it.readBytes() }
                     val hit = dexBytes.toString(Charsets.ISO_8859_1)
                         .contains("com/ss/android/ugc/awemes/ModuleMain")
-                    Log.e(TAG, "inspect ${dexEntry.name} ModuleMain string exists=" + hit)
+                    Log.e(TAG, "inspect[$label] ${dexEntry.name} ModuleMain string exists=" + hit)
                 }
             }
         }.onFailure { e ->
-            Log.e(TAG, "inspectMaterializedPlugin failed: ${e.javaClass.simpleName}: ${e.message}")
+            Log.e(TAG, "inspectMaterializedPlugin[$label] failed: ${e.javaClass.simpleName}: ${e.message}")
         }
     }
 
-    private fun inspectDexFileClasses(pluginApk: File) {
+    private fun inspectDexFileClasses(pluginApk: File, label: String) {
         runCatching {
             val dexFile = DexFile(pluginApk.absolutePath)
             val entries = dexFile.entries()
@@ -229,12 +341,12 @@ object BridgeRuntime {
             }
             dexFile.close()
 
-            Log.e(TAG, "dexfile class count=" + all.size)
-            Log.e(TAG, "dexfile ModuleMain class exists=" + all.contains("com.ss.android.ugc.awemes.ModuleMain"))
+            Log.e(TAG, "dexfile[$label] class count=" + all.size)
+            Log.e(TAG, "dexfile[$label] ModuleMain class exists=" + all.contains("com.ss.android.ugc.awemes.ModuleMain"))
             val awemes = all.filter { it.startsWith("com.ss.android.ugc.awemes") }.take(50)
-            Log.e(TAG, "dexfile awemes sample=" + awemes.joinToString())
+            Log.e(TAG, "dexfile[$label] awemes sample=" + awemes.joinToString())
         }.onFailure { e ->
-            Log.e(TAG, "inspectDexFileClasses failed: ${e.javaClass.simpleName}: ${e.message}")
+            Log.e(TAG, "inspectDexFileClasses[$label] failed: ${e.javaClass.simpleName}: ${e.message}")
         }
     }
 
