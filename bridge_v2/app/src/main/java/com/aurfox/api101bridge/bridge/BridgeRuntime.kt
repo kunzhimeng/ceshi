@@ -6,6 +6,7 @@ import android.util.Log
 import dalvik.system.DexClassLoader
 import dalvik.system.DexFile
 import dalvik.system.InMemoryDexClassLoader
+import dalvik.system.PathClassLoader
 import io.github.libxposed.api.XposedModule
 import io.github.libxposed.api.XposedModuleInterface.ModuleLoadedParam
 import io.github.libxposed.api.XposedModuleInterface.PackageLoadedParam
@@ -23,8 +24,14 @@ private data class LoadedPlugin(
     val onPackageLoaded: Method?,
 )
 
+private data class LoaderResult(
+    val classLoader: ClassLoader,
+    val entryClass: Class<*>,
+    val strategy: String,
+)
+
 object BridgeRuntime {
-    private const val TAG = "API101BridgeE999"
+    private const val TAG = "API101BridgeF111"
     private const val HOST_PACKAGE = "com.aurfox.api101bridge"
 
     private lateinit var hostModule: XposedModule
@@ -37,7 +44,7 @@ object BridgeRuntime {
     }
 
     fun dispatchPackageLoaded(param: PackageLoadedParam) {
-        Log.e(TAG, "dispatchPackageLoaded start PROBE-0323-E-DEXFILE-999")
+        Log.e(TAG, "dispatchPackageLoaded start PROBE-0323-F-LOADER-111")
 
         val plugin = ensurePluginLoaded() ?: run {
             Log.e(TAG, "ensurePluginLoaded returned null")
@@ -72,12 +79,13 @@ object BridgeRuntime {
             inspectDexFileClasses(pluginApk)
 
             val info = PluginApkInspector.inspect(pluginApk)
-            val classLoader = createPluginClassLoader(pluginApk, currentContext)
+            val loaderResult = loadEntryClassWithStrategies(pluginApk, info.entryClass, currentContext)
 
-            Log.e(TAG, "loading entryClass=" + info.entryClass)
-            val entryClass = classLoader.loadClass(info.entryClass)
-            val pluginInterface = classLoader.loadClass(ReflectionNames.XPOSED_INTERFACE)
-            val pluginModuleLoadedParam = classLoader.loadClass(ReflectionNames.MODULE_LOADED_PARAM)
+            Log.e(TAG, "entry load strategy=" + loaderResult.strategy)
+            Log.e(TAG, "loading plugin api classes using same loader")
+
+            val pluginInterface = loaderResult.classLoader.loadClass(ReflectionNames.XPOSED_INTERFACE)
+            val pluginModuleLoadedParam = loaderResult.classLoader.loadClass(ReflectionNames.MODULE_LOADED_PARAM)
 
             val interfaceProxy = Api100InterfaceProxy.create(pluginInterface, hostModule)
             val moduleLoadedParamProxy = PluginParamProxyFactory.create(
@@ -86,20 +94,20 @@ object BridgeRuntime {
             )
 
             val entryInstance = instantiateEntry(
-                entryClass = entryClass,
+                entryClass = loaderResult.entryClass,
                 pluginInterface = pluginInterface,
                 pluginModuleLoadedParam = pluginModuleLoadedParam,
                 interfaceProxy = interfaceProxy,
                 moduleLoadedParamProxy = moduleLoadedParamProxy,
             )
 
-            val onPackageLoaded = entryClass.methods.firstOrNull {
+            val onPackageLoaded = loaderResult.entryClass.methods.firstOrNull {
                 it.name == "onPackageLoaded" && it.parameterTypes.size == 1
             }
 
             LoadedPlugin(
                 info = info,
-                classLoader = classLoader,
+                classLoader = loaderResult.classLoader,
                 entryInstance = entryInstance,
                 onPackageLoaded = onPackageLoaded,
             ).also {
@@ -111,22 +119,49 @@ object BridgeRuntime {
         }
     }
 
-    private fun createPluginClassLoader(pluginApk: File, currentContext: Context): ClassLoader {
-        return runCatching {
+    private fun loadEntryClassWithStrategies(
+        pluginApk: File,
+        entryClassName: String,
+        currentContext: Context,
+    ): LoaderResult {
+        val parent = hostModule.javaClass.classLoader
+
+        runCatching {
+            Log.e(TAG, "trying PathClassLoader")
+            val loader = PathClassLoader(pluginApk.absolutePath, parent)
+            val entryClass = loader.loadClass(entryClassName)
+            return LoaderResult(loader, entryClass, "PathClassLoader")
+        }.onFailure {
+            Log.e(TAG, "PathClassLoader failed: ${it.javaClass.simpleName}: ${it.message}")
+        }
+
+        runCatching {
+            Log.e(TAG, "trying InMemoryDexClassLoader")
             val buffers = readAllDexBuffers(pluginApk)
             Log.e(TAG, "creating InMemoryDexClassLoader, dexCount=" + buffers.size)
-            InMemoryDexClassLoader(buffers.toTypedArray(), hostModule.javaClass.classLoader)
-        }.getOrElse { e ->
-            Log.e(TAG, "InMemoryDexClassLoader failed: ${e.javaClass.simpleName}: ${e.message}")
+            val loader = InMemoryDexClassLoader(buffers.toTypedArray(), parent)
+            val entryClass = loader.loadClass(entryClassName)
+            return LoaderResult(loader, entryClass, "InMemoryDexClassLoader")
+        }.onFailure {
+            Log.e(TAG, "InMemoryDexClassLoader failed: ${it.javaClass.simpleName}: ${it.message}")
+        }
+
+        runCatching {
+            Log.e(TAG, "trying DexClassLoader")
             val optimizedDir = File(currentContext.cacheDir, "bridge_dex").apply { mkdirs() }
-            Log.e(TAG, "falling back to DexClassLoader")
-            DexClassLoader(
+            val loader = DexClassLoader(
                 pluginApk.absolutePath,
                 optimizedDir.absolutePath,
                 pluginApk.parentFile?.absolutePath,
-                hostModule.javaClass.classLoader,
+                parent,
             )
+            val entryClass = loader.loadClass(entryClassName)
+            return LoaderResult(loader, entryClass, "DexClassLoader")
+        }.onFailure {
+            Log.e(TAG, "DexClassLoader failed: ${it.javaClass.simpleName}: ${it.message}")
         }
+
+        error("All loader strategies failed for $entryClassName")
     }
 
     private fun readAllDexBuffers(pluginApk: File): List<ByteBuffer> {
