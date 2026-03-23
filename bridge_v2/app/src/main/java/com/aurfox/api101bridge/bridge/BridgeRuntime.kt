@@ -11,9 +11,11 @@ object BridgeRuntime {
     private lateinit var hostModule: XposedModule
     private lateinit var hostModuleLoadedParam: ModuleLoadedParam
 
+   
     @JvmStatic
-    val classLoader: ClassLoader?
-        get() = runCatching { hostModule.javaClass.classLoader }.getOrNull()
+    fun getClassLoader(): ClassLoader? {
+        return runCatching { hostModule.javaClass.classLoader }.getOrNull()
+    }
 
     @JvmStatic
     fun attachHost(module: XposedModule, param: ModuleLoadedParam) {
