@@ -93,6 +93,8 @@ object BridgeRuntime {
             inspectMaterializedPlugin(candidate.sourceApk, candidate.label)
             inspectDexFileClasses(candidate.sourceApk, candidate.label)
 
+            val actualInfo = PluginApkInspector.inspect(candidate.sourceApk)
+
             val loaderResult = loadEntryClassWithStrategies(
                 pluginApk = candidate.sourceApk,
                 entryClassName = candidate.entryClassName,
@@ -123,7 +125,7 @@ object BridgeRuntime {
             }
 
             LoadedPlugin(
-                info = TargetPluginInfo(candidate.sourceApk, candidate.entryClassName),
+                info = actualInfo,
                 classLoader = loaderResult.classLoader,
                 entryInstance = entryInstance,
                 onPackageLoaded = onPackageLoaded,
