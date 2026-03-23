@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.util.Log
 import dalvik.system.DexClassLoader
+import dalvik.system.DexFile
 import dalvik.system.InMemoryDexClassLoader
 import io.github.libxposed.api.XposedModule
 import io.github.libxposed.api.XposedModuleInterface.ModuleLoadedParam
@@ -23,7 +24,7 @@ private data class LoadedPlugin(
 )
 
 object BridgeRuntime {
-    private const val TAG = "API101BridgeD777"
+    private const val TAG = "API101BridgeE999"
     private const val HOST_PACKAGE = "com.aurfox.api101bridge"
 
     private lateinit var hostModule: XposedModule
@@ -36,7 +37,7 @@ object BridgeRuntime {
     }
 
     fun dispatchPackageLoaded(param: PackageLoadedParam) {
-        Log.e(TAG, "dispatchPackageLoaded start PROBE-0323-D-UNIQUE-777")
+        Log.e(TAG, "dispatchPackageLoaded start PROBE-0323-E-DEXFILE-999")
 
         val plugin = ensurePluginLoaded() ?: run {
             Log.e(TAG, "ensurePluginLoaded returned null")
@@ -68,6 +69,7 @@ object BridgeRuntime {
             ) ?: return null
 
             inspectMaterializedPlugin(pluginApk)
+            inspectDexFileClasses(pluginApk)
 
             val info = PluginApkInspector.inspect(pluginApk)
             val classLoader = createPluginClassLoader(pluginApk, currentContext)
@@ -179,6 +181,25 @@ object BridgeRuntime {
             }
         }.onFailure { e ->
             Log.e(TAG, "inspectMaterializedPlugin failed: ${e.javaClass.simpleName}: ${e.message}")
+        }
+    }
+
+    private fun inspectDexFileClasses(pluginApk: File) {
+        runCatching {
+            val dexFile = DexFile(pluginApk.absolutePath)
+            val entries = dexFile.entries()
+            val all = mutableListOf<String>()
+            while (entries.hasMoreElements()) {
+                all += entries.nextElement()
+            }
+            dexFile.close()
+
+            Log.e(TAG, "dexfile class count=" + all.size)
+            Log.e(TAG, "dexfile ModuleMain class exists=" + all.contains("com.ss.android.ugc.awemes.ModuleMain"))
+            val awemes = all.filter { it.startsWith("com.ss.android.ugc.awemes") }.take(50)
+            Log.e(TAG, "dexfile awemes sample=" + awemes.joinToString())
+        }.onFailure { e ->
+            Log.e(TAG, "inspectDexFileClasses failed: ${e.javaClass.simpleName}: ${e.message}")
         }
     }
 
