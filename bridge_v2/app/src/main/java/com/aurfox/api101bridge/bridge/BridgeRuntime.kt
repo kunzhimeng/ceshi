@@ -130,7 +130,8 @@ object BridgeRuntime {
 
                 if (dexEntry != null) {
                     val dexBytes = zip.getInputStream(dexEntry).use { it.readBytes() }
-                    val hit = dexBytes.indexOfSlice("com/ss/android/ugc/awemes/ModuleMain".toByteArray()) >= 0
+                    val hit = dexBytes.toString(Charsets.ISO_8859_1)
+                        .contains("com/ss/android/ugc/awemes/ModuleMain")
                     Log.e(TAG, "inspect ModuleMain string exists=" + hit)
                 }
             }
