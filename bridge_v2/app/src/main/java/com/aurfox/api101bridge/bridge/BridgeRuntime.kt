@@ -4,18 +4,20 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.util.Log
 import dalvik.system.DexClassLoader
+import dalvik.system.InMemoryDexClassLoader
 import io.github.libxposed.api.XposedModule
 import io.github.libxposed.api.XposedModuleInterface.ModuleLoadedParam
 import io.github.libxposed.api.XposedModuleInterface.PackageLoadedParam
 import java.io.File
 import java.lang.reflect.Constructor
 import java.lang.reflect.Method
+import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicReference
 import java.util.zip.ZipFile
 
 private data class LoadedPlugin(
     val info: TargetPluginInfo,
-    val classLoader: DexClassLoader,
+    val classLoader: ClassLoader,
     val entryInstance: Any,
     val onPackageLoaded: Method?,
 )
@@ -34,7 +36,7 @@ object BridgeRuntime {
     }
 
     fun dispatchPackageLoaded(param: PackageLoadedParam) {
-        Log.e(TAG, "dispatchPackageLoaded start PROBE-0323-A")
+        Log.e(TAG, "dispatchPackageLoaded start PROBE-0323-B")
 
         val plugin = ensurePluginLoaded() ?: run {
             Log.e(TAG, "ensurePluginLoaded returned null")
@@ -68,15 +70,7 @@ object BridgeRuntime {
             inspectMaterializedPlugin(pluginApk)
 
             val info = PluginApkInspector.inspect(pluginApk)
-
-            val optimizedDir = File(currentContext.cacheDir, "bridge_dex").apply { mkdirs() }
-
-            val classLoader = DexClassLoader(
-                info.apk.absolutePath,
-                optimizedDir.absolutePath,
-                info.apk.parentFile?.absolutePath,
-                hostModule.javaClass.classLoader,
-            )
+            val classLoader = createPluginClassLoader(pluginApk, currentContext)
 
             val entryClass = classLoader.loadClass(info.entryClass)
             val pluginInterface = classLoader.loadClass(ReflectionNames.XPOSED_INTERFACE)
@@ -111,6 +105,27 @@ object BridgeRuntime {
         }.getOrElse { e ->
             Log.e(TAG, "ensurePluginLoaded failed: ${e.javaClass.simpleName}: ${e.message}")
             null
+        }
+    }
+
+    private fun createPluginClassLoader(pluginApk: File, currentContext: Context): ClassLoader {
+        return runCatching {
+            ZipFile(pluginApk).use { zip ->
+                val dexEntry = zip.getEntry("classes.dex") ?: error("classes.dex missing")
+                val dexBytes = zip.getInputStream(dexEntry).use { it.readBytes() }
+                Log.e(TAG, "creating InMemoryDexClassLoader, dexSize=" + dexBytes.size)
+                InMemoryDexClassLoader(ByteBuffer.wrap(dexBytes), hostModule.javaClass.classLoader)
+            }
+        }.getOrElse { e ->
+            Log.e(TAG, "InMemoryDexClassLoader failed: ${e.javaClass.simpleName}: ${e.message}")
+            val optimizedDir = File(currentContext.cacheDir, "bridge_dex").apply { mkdirs() }
+            Log.e(TAG, "falling back to DexClassLoader")
+            DexClassLoader(
+                pluginApk.absolutePath,
+                optimizedDir.absolutePath,
+                pluginApk.parentFile?.absolutePath,
+                hostModule.javaClass.classLoader,
+            )
         }
     }
 
