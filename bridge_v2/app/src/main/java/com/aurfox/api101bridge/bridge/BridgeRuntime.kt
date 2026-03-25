@@ -6,7 +6,9 @@ import dalvik.system.DexClassLoader
 import dalvik.system.DexFile
 import dalvik.system.InMemoryDexClassLoader
 import dalvik.system.PathClassLoader
+import io.github.libxposed.api.XposedInterface
 import io.github.libxposed.api.XposedModule
+import io.github.libxposed.api.XposedModuleInterface
 import io.github.libxposed.api.XposedModuleInterface.ModuleLoadedParam
 import io.github.libxposed.api.XposedModuleInterface.PackageLoadedParam
 import java.io.File
@@ -60,7 +62,7 @@ object BridgeRuntime {
 
     @JvmStatic
     fun dispatchPackageLoaded(param: PackageLoadedParam) {
-        Log.e(TAG, "PROBE-0325-ALT-REWRITE-902")
+        Log.e(TAG, "PROBE-0325-ALT-REWRITE-903")
         val loaded = ensureLoaded(param) ?: run {
             Log.e(TAG, "ensureLoaded returned null")
             return
@@ -101,7 +103,7 @@ object BridgeRuntime {
             inspectDexFileClasses(candidate.apk, candidate.label)
             probeDexLoadClass(candidate.apk, candidate.entry, candidate.label)
 
-            val rewrittenApk = rewritePluginApkMinimal(candidate.apk, ctx, candidate.label)
+            val rewrittenApk = rewritePluginApkExpanded(candidate.apk, ctx, candidate.label)
             Log.e(TAG, "rewritten candidate apk=${rewrittenApk.absolutePath}")
             inspectDexFileClasses(rewrittenApk, candidate.label + "-rewritten")
             probeDexLoadClass(rewrittenApk, candidate.entry, candidate.label + "-rewritten")
@@ -110,7 +112,7 @@ object BridgeRuntime {
             Log.e(TAG, "entry load strategy=" + loaderResult.strategy)
             Log.e(TAG, "entryClassLoader=" + loaderResult.entryClass.classLoader)
             Log.e(TAG, "entrySuper=" + loaderResult.entryClass.superclass?.name)
-            Log.e(TAG, "entryConstructors=" + loaderResult.entryClass.constructors.joinToString())
+            Log.e(TAG, "entryConstructorCount=" + loaderResult.entryClass.constructors.size)
 
             val ctor = loaderResult.entryClass.constructors.firstOrNull { ctor ->
                 val params = ctor.parameterTypes
@@ -170,7 +172,7 @@ object BridgeRuntime {
         error("no valid outer/inner candidate")
     }
 
-    private fun rewritePluginApkMinimal(
+    private fun rewritePluginApkExpanded(
         pluginApk: File,
         ctx: Context,
         label: String,
@@ -216,32 +218,39 @@ object BridgeRuntime {
     }
 
     private fun buildMinimalRewritePairs(runtimeModuleClassName: String): List<Pair<String, String>> {
-        val oldDot = "io.github.libxposed.api.XposedModule"
-        val newDot = runtimeModuleClassName
-        if (oldDot == newDot) {
-            Log.e(TAG, "rewrite skipped: runtime module already canonical")
-            return emptyList()
-        }
-
-        val oldSlash = oldDot.replace('.', '/')
-        val newSlash = newDot.replace('.', '/')
-        if (oldSlash.length != newSlash.length) {
-            Log.e(TAG, "rewrite skipped length mismatch: $oldSlash -> $newSlash")
-            return emptyList()
-        }
+        val runtimeMappings = linkedMapOf(
+            "io.github.libxposed.api.XposedModule" to runtimeModuleClassName,
+            "io.github.libxposed.api.XposedInterface" to XposedInterface::class.java.name,
+            "io.github.libxposed.api.XposedModuleInterface" to XposedModuleInterface::class.java.name,
+            "io.github.libxposed.api.XposedModuleInterface\$ModuleLoadedParam" to ModuleLoadedParam::class.java.name,
+            "io.github.libxposed.api.XposedModuleInterface\$PackageLoadedParam" to PackageLoadedParam::class.java.name,
+        )
 
         val pairs = mutableListOf<Pair<String, String>>()
-        pairs += oldSlash to newSlash
+        runtimeMappings.forEach { (oldDot, newDot) ->
+            if (oldDot == newDot) {
+                Log.e(TAG, "rewrite skipped canonical mapping: $oldDot")
+                return@forEach
+            }
 
-        val oldDesc = "L$oldSlash;"
-        val newDesc = "L$newSlash;"
-        if (oldDesc.length == newDesc.length) {
-            pairs += oldDesc to newDesc
-        }
-        if (oldDot.length == newDot.length) {
-            pairs += oldDot to newDot
+            addRewritePair(pairs, oldDot.replace('.', '/'), newDot.replace('.', '/'))
+            addRewritePair(pairs, "L${oldDot.replace('.', '/')};", "L${newDot.replace('.', '/')};")
+            addRewritePair(pairs, oldDot, newDot)
         }
         return pairs.distinct()
+    }
+
+    private fun addRewritePair(
+        out: MutableList<Pair<String, String>>,
+        oldValue: String,
+        newValue: String,
+    ) {
+        if (oldValue == newValue) return
+        if (oldValue.length != newValue.length) {
+            Log.e(TAG, "rewrite skipped length mismatch: $oldValue -> $newValue")
+            return
+        }
+        out += oldValue to newValue
     }
 
     private fun patchDexBytes(input: ByteArray, rewritePairs: List<Pair<String, String>>): Pair<ByteArray, Int> {
