@@ -175,11 +175,19 @@ object BridgeRuntime {
                 ?: XposedModule::class.java.classLoader
 
         val known = linkedMapOf<String, Class<*>>()
+        known["io.github.libxposed.api.XposedModule"] = XposedModule::class.java
+        known[ReflectionNames.XPOSED_INTERFACE] = XposedInterface::class.java
+        known["io.github.libxposed.api.XposedModuleInterface"] = XposedModuleInterface::class.java
+        known[ReflectionNames.MODULE_LOADED_PARAM] = ModuleLoadedParam::class.java
+        known[ReflectionNames.PACKAGE_LOADED_PARAM] = PackageLoadedParam::class.java
+
+        // Also expose the runtime/obfuscated names for diagnostics and mixed callers.
         known[XposedModule::class.java.name] = XposedModule::class.java
         known[XposedInterface::class.java.name] = XposedInterface::class.java
         known[XposedModuleInterface::class.java.name] = XposedModuleInterface::class.java
         known[ModuleLoadedParam::class.java.name] = ModuleLoadedParam::class.java
         known[PackageLoadedParam::class.java.name] = PackageLoadedParam::class.java
+
         known[hostModule.javaClass.name] = hostModule.javaClass
         known[hostModuleLoadedParam.javaClass.name] = hostModuleLoadedParam.javaClass
         known[packageParam.javaClass.name] = packageParam.javaClass
@@ -217,7 +225,7 @@ object BridgeRuntime {
             Log.e(
                 TAG,
                 "parent=${p.label}, loader=${p.loader}, " +
-                    "canXposedModule=${canLoad(p.loader, XposedModule::class.java.name)}, " +
+                    "canXposedModule=${canLoad(p.loader, "io.github.libxposed.api.XposedModule")}, " +
                     "canXposedInterface=${canLoad(p.loader, ReflectionNames.XPOSED_INTERFACE)}, " +
                     "canModuleLoadedParam=${canLoad(p.loader, ReflectionNames.MODULE_LOADED_PARAM)}, " +
                     "canPackageLoadedParam=${canLoad(p.loader, ReflectionNames.PACKAGE_LOADED_PARAM)}",
