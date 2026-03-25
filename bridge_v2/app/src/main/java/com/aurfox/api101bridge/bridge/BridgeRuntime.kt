@@ -245,17 +245,14 @@ object BridgeRuntime {
                 if (Modifier.isStatic(field.modifiers)) return@forEach
                 runCatching {
                     field.isAccessible = true
-                    when {
-                        field.type.isInstance(interfaceProxy) -> {
-                            field.set(instance, interfaceProxy)
-                            hit++
-                            Log.e(TAG, "primed field ${owner.name}#${field.name} with interfaceProxy")
-                        }
-                        field.type.isInstance(moduleLoadedParamProxy) -> {
-                            field.set(instance, moduleLoadedParamProxy)
-                            hit++
-                            Log.e(TAG, "primed field ${owner.name}#${field.name} with moduleLoadedParamProxy")
-                        }
+                    if (field.type.isInstance(interfaceProxy)) {
+                        field.set(instance, interfaceProxy)
+                        hit++
+                        Log.e(TAG, "primed field ${owner.name}#${field.name} with interfaceProxy")
+                    } else if (field.type.isInstance(moduleLoadedParamProxy)) {
+                        field.set(instance, moduleLoadedParamProxy)
+                        hit++
+                        Log.e(TAG, "primed field ${owner.name}#${field.name} with moduleLoadedParamProxy")
                     }
                 }.onFailure {
                     Log.e(TAG, "prime field failed ${owner.name}#${field.name}: ${throwableChain(it)}", it)
