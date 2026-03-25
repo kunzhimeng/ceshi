@@ -33,6 +33,11 @@ private data class LoaderResult(
     val strategy: String,
 )
 
+private data class ParentCandidate(
+    val label: String,
+    val loader: ClassLoader?,
+)
+
 object BridgeRuntime {
     private const val TAG = "API101BridgeKEF888"
     private const val HOST_PACKAGE = "com.aurfox.api101bridge"
@@ -65,14 +70,17 @@ object BridgeRuntime {
             loaded.onPackageLoaded?.invoke(loaded.entryInstance, pluginParam)
             Log.e(TAG, "legacy onPackageLoaded invoked")
         }.onFailure {
-            Log.e(TAG, "dispatchPackageLoaded failed: ${it.javaClass.simpleName}: ${it.message}")
+            Log.e(TAG, "dispatchPackageLoaded failed: ${throwableChain(it)}", it)
         }
     }
 
     private fun ensureLoaded(): LoadedPlugin? {
         loadedRef.get()?.let { return it }
         return runCatching {
-            val ctx = currentApplicationContext()
+            val ctx = currentApplicationContextOrNull() ?: run {
+                Log.e(TAG, "currentApplication still null, skip this round")
+                return null
+            }
             val outerApk = PluginStorage.materializeBundledPlugin(ctx, HOST_PACKAGE)
                 ?: error("materialized outer apk null")
             Log.e(TAG, "outerApk=" + outerApk.absolutePath)
@@ -89,6 +97,9 @@ object BridgeRuntime {
 
             val loaderResult = loadEntryClassWithStrategies(candidate.apk, candidate.entry, ctx)
             Log.e(TAG, "entry load strategy=" + loaderResult.strategy)
+            Log.e(TAG, "entryClassLoader=" + loaderResult.entryClass.classLoader)
+            Log.e(TAG, "entrySuper=" + loaderResult.entryClass.superclass?.name)
+            Log.e(TAG, "entryConstructors=" + loaderResult.entryClass.constructors.joinToString())
 
             val pluginInterface = loaderResult.classLoader.loadClass(ReflectionNames.XPOSED_INTERFACE)
             val pluginModuleLoadedParam = loaderResult.classLoader.loadClass(ReflectionNames.MODULE_LOADED_PARAM)
@@ -113,7 +124,7 @@ object BridgeRuntime {
                 loadedRef.set(it)
             }
         }.getOrElse {
-            Log.e(TAG, "ensureLoaded failed: ${it.javaClass.simpleName}: ${it.message}")
+            Log.e(TAG, "ensureLoaded failed: ${throwableChain(it)}", it)
             null
         }
     }
@@ -148,41 +159,51 @@ object BridgeRuntime {
         entryClassName: String,
         ctx: Context,
     ): LoaderResult {
-        val parent = hostModule.javaClass.classLoader
+        val parents = parentCandidates()
 
-        runCatching {
-            Log.e(TAG, "trying PathClassLoader")
-            val loader = PathClassLoader(pluginApk.absolutePath, parent)
-            val entryClass = loader.loadClass(entryClassName)
-            return LoaderResult(loader, entryClass, "PathClassLoader")
-        }.onFailure {
-            Log.e(TAG, "PathClassLoader failed: ${it.javaClass.simpleName}: ${it.message}")
-        }
-
-        runCatching {
-            Log.e(TAG, "trying InMemoryDexClassLoader")
-            val buffers = readAllDexBuffers(pluginApk)
-            Log.e(TAG, "creating InMemoryDexClassLoader, dexCount=" + buffers.size)
-            val loader = InMemoryDexClassLoader(buffers.toTypedArray(), parent)
-            val entryClass = loader.loadClass(entryClassName)
-            return LoaderResult(loader, entryClass, "InMemoryDexClassLoader")
-        }.onFailure {
-            Log.e(TAG, "InMemoryDexClassLoader failed: ${it.javaClass.simpleName}: ${it.message}")
-        }
-
-        runCatching {
-            Log.e(TAG, "trying DexClassLoader")
-            val optimizedDir = File(ctx.cacheDir, "bridge_dex").apply { mkdirs() }
-            val loader = DexClassLoader(
-                pluginApk.absolutePath,
-                optimizedDir.absolutePath,
-                pluginApk.parentFile?.absolutePath,
-                parent,
+        for (p in parents) {
+            Log.e(
+                TAG,
+                "parent=${p.label}, loader=${p.loader}, " +
+                    "canXposedModule=${canLoad(p.loader, "io.github.libxposed.api.XposedModule")}, " +
+                    "canXposedInterface=${canLoad(p.loader, ReflectionNames.XPOSED_INTERFACE)}, " +
+                    "canModuleLoadedParam=${canLoad(p.loader, ReflectionNames.MODULE_LOADED_PARAM)}",
             )
-            val entryClass = loader.loadClass(entryClassName)
-            return LoaderResult(loader, entryClass, "DexClassLoader")
-        }.onFailure {
-            Log.e(TAG, "DexClassLoader failed: ${it.javaClass.simpleName}: ${it.message}")
+
+            runCatching {
+                Log.e(TAG, "trying PathClassLoader parent=${p.label}")
+                val loader = PathClassLoader(pluginApk.absolutePath, p.loader)
+                val entryClass = loader.loadClass(entryClassName)
+                return LoaderResult(loader, entryClass, "PathClassLoader/${p.label}")
+            }.onFailure {
+                Log.e(TAG, "PathClassLoader/${p.label} failed: ${throwableChain(it)}", it)
+            }
+
+            runCatching {
+                Log.e(TAG, "trying InMemoryDexClassLoader parent=${p.label}")
+                val buffers = readAllDexBuffers(pluginApk)
+                Log.e(TAG, "creating InMemoryDexClassLoader, dexCount=" + buffers.size)
+                val loader = InMemoryDexClassLoader(buffers.toTypedArray(), p.loader)
+                val entryClass = loader.loadClass(entryClassName)
+                return LoaderResult(loader, entryClass, "InMemoryDexClassLoader/${p.label}")
+            }.onFailure {
+                Log.e(TAG, "InMemoryDexClassLoader/${p.label} failed: ${throwableChain(it)}", it)
+            }
+
+            runCatching {
+                Log.e(TAG, "trying DexClassLoader parent=${p.label}")
+                val optimizedDir = File(ctx.cacheDir, "bridge_dex").apply { mkdirs() }
+                val loader = DexClassLoader(
+                    pluginApk.absolutePath,
+                    optimizedDir.absolutePath,
+                    pluginApk.parentFile?.absolutePath,
+                    p.loader,
+                )
+                val entryClass = loader.loadClass(entryClassName)
+                return LoaderResult(loader, entryClass, "DexClassLoader/${p.label}")
+            }.onFailure {
+                Log.e(TAG, "DexClassLoader/${p.label} failed: ${throwableChain(it)}", it)
+            }
         }
 
         error("all loader strategies failed for $entryClassName")
@@ -237,7 +258,7 @@ object BridgeRuntime {
             dexFile.close()
             found
         }.getOrElse {
-            Log.e(TAG, "hasDexClass failed: ${it.javaClass.simpleName}: ${it.message}")
+            Log.e(TAG, "hasDexClass failed: ${throwableChain(it)}", it)
             false
         }
     }
@@ -279,7 +300,7 @@ object BridgeRuntime {
             val awemes = all.filter { it.startsWith("com.ss.android.ugc.awemes") }.sorted().take(80)
             Log.e(TAG, "dexfile[$label] awemes sample=" + awemes.joinToString())
         }.onFailure {
-            Log.e(TAG, "inspectDexFileClasses[$label] failed: ${it.javaClass.simpleName}: ${it.message}")
+            Log.e(TAG, "inspectDexFileClasses[$label] failed: ${throwableChain(it)}", it)
         }
     }
 
@@ -293,14 +314,45 @@ object BridgeRuntime {
             Log.e(TAG, "dexfile[$label] reflective loadClass result=" + result)
             dexFile.close()
         }.onFailure {
-            Log.e(TAG, "probeDexLoadClass[$label] failed: ${it.javaClass.simpleName}: ${it.message}")
+            Log.e(TAG, "probeDexLoadClass[$label] failed: ${throwableChain(it)}", it)
         }
     }
 
-    private fun currentApplicationContext(): Context {
-        val activityThreadClass = Class.forName("android.app.ActivityThread")
-        val currentApplicationMethod = activityThreadClass.getDeclaredMethod("currentApplication")
-        val app = currentApplicationMethod.invoke(null) as? Context
-        return app ?: error("ActivityThread.currentApplication() returned null")
+    private fun parentCandidates(): List<ParentCandidate> {
+        val list = mutableListOf<ParentCandidate>()
+        list += ParentCandidate("hostModule.javaClass.classLoader", hostModule.javaClass.classLoader)
+        list += ParentCandidate("BridgeRuntime::class.java.classLoader", BridgeRuntime::class.java.classLoader)
+        list += ParentCandidate("XposedModule::class.java.classLoader", XposedModule::class.java.classLoader)
+        hostModule.javaClass.classLoader?.parent?.let {
+            list += ParentCandidate("hostModule.javaClass.classLoader.parent", it)
+        }
+        list += ParentCandidate("boot(null)", null)
+        return list.distinctBy { System.identityHashCode(it.loader) }
+    }
+
+    private fun throwableChain(t: Throwable): String {
+        val parts = mutableListOf<String>()
+        var cur: Throwable? = t
+        while (cur != null) {
+            parts += "${cur.javaClass.name}: ${cur.message}"
+            cur = cur.cause
+        }
+        return parts.joinToString(" <- ")
+    }
+
+    private fun canLoad(loader: ClassLoader?, className: String): Boolean {
+        if (loader == null) return false
+        return runCatching {
+            loader.loadClass(className)
+            true
+        }.getOrDefault(false)
+    }
+
+    private fun currentApplicationContextOrNull(): Context? {
+        return runCatching {
+            val activityThreadClass = Class.forName("android.app.ActivityThread")
+            val currentApplicationMethod = activityThreadClass.getDeclaredMethod("currentApplication")
+            currentApplicationMethod.invoke(null) as? Context
+        }.getOrNull()
     }
 }
