@@ -35,17 +35,6 @@ private data class LoaderResult(
     val strategy: String,
 )
 
-private data class RuntimeApiNames(
-    val moduleClassName: String,
-    val interfaceClassName: String,
-    val moduleInterfaceClassName: String,
-    val moduleLoadedParamClassName: String,
-    val packageLoadedParamClassName: String,
-    val beforeHookCallbackClassName: String?,
-    val afterHookCallbackClassName: String?,
-    val methodUnhookerClassName: String?,
-)
-
 private data class RewriteStat(
     val entryName: String,
     val replacementCount: Int,
@@ -71,7 +60,7 @@ object BridgeRuntime {
 
     @JvmStatic
     fun dispatchPackageLoaded(param: PackageLoadedParam) {
-        Log.e(TAG, "PROBE-0325-ALT-REWRITE-901")
+        Log.e(TAG, "PROBE-0325-ALT-REWRITE-902")
         val loaded = ensureLoaded(param) ?: run {
             Log.e(TAG, "ensureLoaded returned null")
             return
@@ -112,13 +101,7 @@ object BridgeRuntime {
             inspectDexFileClasses(candidate.apk, candidate.label)
             probeDexLoadClass(candidate.apk, candidate.entry, candidate.label)
 
-            val runtimeApiNames = detectRuntimeApiNames(packageParam)
-            Log.e(TAG, "runtime api module=${runtimeApiNames.moduleClassName}")
-            Log.e(TAG, "runtime api iface=${runtimeApiNames.interfaceClassName}")
-            Log.e(TAG, "runtime api moduleParam=${runtimeApiNames.moduleLoadedParamClassName}")
-            Log.e(TAG, "runtime api packageParam=${runtimeApiNames.packageLoadedParamClassName}")
-
-            val rewrittenApk = rewritePluginApk(candidate.apk, ctx, candidate.label, runtimeApiNames)
+            val rewrittenApk = rewritePluginApkMinimal(candidate.apk, ctx, candidate.label)
             Log.e(TAG, "rewritten candidate apk=${rewrittenApk.absolutePath}")
             inspectDexFileClasses(rewrittenApk, candidate.label + "-rewritten")
             probeDexLoadClass(rewrittenApk, candidate.entry, candidate.label + "-rewritten")
@@ -187,64 +170,16 @@ object BridgeRuntime {
         error("no valid outer/inner candidate")
     }
 
-    private fun detectRuntimeApiNames(packageParam: PackageLoadedParam): RuntimeApiNames {
-        val moduleClass = XposedModule::class.java
-        val xposedInterfaceClass = resolveRuntimeXposedInterfaceClass(moduleClass)
-        val moduleInterfaceClass = resolveRuntimeModuleInterfaceClass(moduleClass, xposedInterfaceClass)
-        val moduleLoadedParamClass = resolveRuntimeModuleLoadedParamClass(moduleInterfaceClass)
-        val packageLoadedParamClass = resolveRuntimePackageLoadedParamClass(packageParam, moduleInterfaceClass)
-        val beforeHookCallbackClass = xposedInterfaceClass.declaredClasses.firstOrNull { it.simpleName == "BeforeHookCallback" }
-        val afterHookCallbackClass = xposedInterfaceClass.declaredClasses.firstOrNull { it.simpleName == "AfterHookCallback" }
-        val methodUnhookerClass = xposedInterfaceClass.declaredClasses.firstOrNull { it.simpleName == "MethodUnhooker" }
-        return RuntimeApiNames(
-            moduleClassName = moduleClass.name,
-            interfaceClassName = xposedInterfaceClass.name,
-            moduleInterfaceClassName = moduleInterfaceClass.name,
-            moduleLoadedParamClassName = moduleLoadedParamClass.name,
-            packageLoadedParamClassName = packageLoadedParamClass.name,
-            beforeHookCallbackClassName = beforeHookCallbackClass?.name,
-            afterHookCallbackClassName = afterHookCallbackClass?.name,
-            methodUnhookerClassName = methodUnhookerClass?.name,
-        )
-    }
-
-    private fun resolveRuntimeXposedInterfaceClass(moduleClass: Class<*>): Class<*> {
-        moduleClass.constructors.forEach { ctor ->
-            ctor.parameterTypes.firstOrNull { it.simpleName == "XposedInterface" }?.let { return it }
-        }
-        moduleClass.declaredFields.firstOrNull { it.type.simpleName == "XposedInterface" }?.let { return it.type }
-        moduleClass.methods.firstOrNull { it.returnType.simpleName == "XposedInterface" }?.let { return it.returnType }
-        error("cannot resolve runtime XposedInterface class")
-    }
-
-    private fun resolveRuntimeModuleInterfaceClass(moduleClass: Class<*>, xposedInterfaceClass: Class<*>): Class<*> {
-        moduleClass.interfaces.firstOrNull { it.simpleName == "XposedModuleInterface" }?.let { return it }
-        xposedInterfaceClass.declaredClasses.firstOrNull { it.simpleName == "MethodUnhooker" } // touch nested classes for logging side effects
-        error("cannot resolve runtime XposedModuleInterface class")
-    }
-
-    private fun resolveRuntimeModuleLoadedParamClass(moduleInterfaceClass: Class<*>): Class<*> {
-        moduleInterfaceClass.declaredClasses.firstOrNull { it.simpleName == "ModuleLoadedParam" }?.let { return it }
-        error("cannot resolve runtime ModuleLoadedParam class")
-    }
-
-    private fun resolveRuntimePackageLoadedParamClass(packageParam: Any, moduleInterfaceClass: Class<*>): Class<*> {
-        moduleInterfaceClass.declaredClasses.firstOrNull { it.simpleName == "PackageLoadedParam" }?.let { return it }
-        packageParam.javaClass.interfaces.firstOrNull { it.simpleName == "PackageLoadedParam" }?.let { return it }
-        packageParam.javaClass.interfaces.firstOrNull { it.simpleName == "PackageReadyParam" }?.let { return it }
-        moduleInterfaceClass.declaredClasses.firstOrNull { it.simpleName == "PackageReadyParam" }?.let { return it }
-        error("cannot resolve runtime PackageLoadedParam class")
-    }
-
-    private fun rewritePluginApk(
+    private fun rewritePluginApkMinimal(
         pluginApk: File,
         ctx: Context,
         label: String,
-        runtimeApiNames: RuntimeApiNames,
     ): File {
         val rewriteDir = File(ctx.cacheDir, "bridge_rewritten_apk").apply { mkdirs() }
         val outFile = File(rewriteDir, pluginApk.nameWithoutExtension + "-$label-rewritten.apk")
-        val rewritePairs = buildRewritePairs(runtimeApiNames)
+        val runtimeModuleClassName = XposedModule::class.java.name
+        val rewritePairs = buildMinimalRewritePairs(runtimeModuleClassName)
+        Log.e(TAG, "runtime module class=" + runtimeModuleClassName)
         Log.e(TAG, "rewrite pair count=" + rewritePairs.size)
         rewritePairs.forEach { (oldValue, newValue) ->
             Log.e(TAG, "rewrite pair: $oldValue -> $newValue")
@@ -280,42 +215,31 @@ object BridgeRuntime {
         return outFile
     }
 
-    private fun buildRewritePairs(runtimeApiNames: RuntimeApiNames): List<Pair<String, String>> {
-        val dotted = linkedMapOf(
-            "io.github.libxposed.api.XposedModule" to runtimeApiNames.moduleClassName,
-            ReflectionNames.XPOSED_INTERFACE to runtimeApiNames.interfaceClassName,
-            ReflectionNames.XPOSED_MODULE_INTERFACE to runtimeApiNames.moduleInterfaceClassName,
-            ReflectionNames.MODULE_LOADED_PARAM to runtimeApiNames.moduleLoadedParamClassName,
-            ReflectionNames.PACKAGE_LOADED_PARAM to runtimeApiNames.packageLoadedParamClassName,
-        )
-        runtimeApiNames.beforeHookCallbackClassName?.let {
-            dotted[ReflectionNames.BEFORE_CALLBACK] = it
+    private fun buildMinimalRewritePairs(runtimeModuleClassName: String): List<Pair<String, String>> {
+        val oldDot = "io.github.libxposed.api.XposedModule"
+        val newDot = runtimeModuleClassName
+        if (oldDot == newDot) {
+            Log.e(TAG, "rewrite skipped: runtime module already canonical")
+            return emptyList()
         }
-        runtimeApiNames.afterHookCallbackClassName?.let {
-            dotted[ReflectionNames.AFTER_CALLBACK] = it
-        }
-        runtimeApiNames.methodUnhookerClassName?.let {
-            dotted[ReflectionNames.METHOD_UNHOOKER] = it
+
+        val oldSlash = oldDot.replace('.', '/')
+        val newSlash = newDot.replace('.', '/')
+        if (oldSlash.length != newSlash.length) {
+            Log.e(TAG, "rewrite skipped length mismatch: $oldSlash -> $newSlash")
+            return emptyList()
         }
 
         val pairs = mutableListOf<Pair<String, String>>()
-        dotted.forEach { (oldDot, newDot) ->
-            if (oldDot == newDot) return@forEach
-            val oldSlash = oldDot.replace('.', '/')
-            val newSlash = newDot.replace('.', '/')
-            if (oldSlash.length != newSlash.length) {
-                Log.e(TAG, "skip rewrite length mismatch: $oldSlash -> $newSlash")
-                return@forEach
-            }
-            pairs += oldSlash to newSlash
-            val oldDesc = "L$oldSlash;"
-            val newDesc = "L$newSlash;"
-            if (oldDesc.length == newDesc.length) {
-                pairs += oldDesc to newDesc
-            }
-            if (oldDot.length == newDot.length) {
-                pairs += oldDot to newDot
-            }
+        pairs += oldSlash to newSlash
+
+        val oldDesc = "L$oldSlash;"
+        val newDesc = "L$newSlash;"
+        if (oldDesc.length == newDesc.length) {
+            pairs += oldDesc to newDesc
+        }
+        if (oldDot.length == newDot.length) {
+            pairs += oldDot to newDot
         }
         return pairs.distinct()
     }
