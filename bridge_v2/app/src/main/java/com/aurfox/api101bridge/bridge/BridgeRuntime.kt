@@ -253,6 +253,8 @@ object BridgeRuntime {
                         field.set(instance, moduleLoadedParamProxy)
                         hit++
                         Log.e(TAG, "primed field ${owner.name}#${field.name} with moduleLoadedParamProxy")
+                    } else {
+                        Unit
                     }
                 }.onFailure {
                     Log.e(TAG, "prime field failed ${owner.name}#${field.name}: ${throwableChain(it)}", it)
