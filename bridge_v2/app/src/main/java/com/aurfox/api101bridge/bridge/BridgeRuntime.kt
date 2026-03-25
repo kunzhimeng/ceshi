@@ -12,7 +12,11 @@ import io.github.libxposed.api.XposedModuleInterface
 import io.github.libxposed.api.XposedModuleInterface.ModuleLoadedParam
 import io.github.libxposed.api.XposedModuleInterface.PackageLoadedParam
 import java.io.File
+import java.lang.reflect.Constructor
+import java.lang.reflect.Field
+import java.lang.reflect.InvocationTargetException
 import java.lang.reflect.Method
+import java.lang.reflect.Modifier
 import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicReference
 import java.util.zip.ZipEntry
@@ -62,7 +66,7 @@ object BridgeRuntime {
 
     @JvmStatic
     fun dispatchPackageLoaded(param: PackageLoadedParam) {
-        Log.e(TAG, "PROBE-0325-ALT-REWRITE-903")
+        Log.e(TAG, "PROBE-0325-ALT-REWRITE-904")
         val loaded = ensureLoaded(param) ?: run {
             Log.e(TAG, "ensureLoaded returned null")
             return
@@ -87,18 +91,18 @@ object BridgeRuntime {
                 Log.e(TAG, "currentApplication still null, skip this round")
                 return null
             }
-            Log.e("API101BridgeV2", "currentApplicationContext=" + ctx.packageName)
+            Log.e("API101BridgeV2", "currentApplicationContext=${ctx.packageName}")
 
             val outerApk = PluginStorage.materializeBundledPlugin(ctx, HOST_PACKAGE)
                 ?: error("materialized outer apk null")
-            Log.e(TAG, "outerApk=" + outerApk.absolutePath)
+            Log.e(TAG, "outerApk=${outerApk.absolutePath}")
 
             inspectDexFileClasses(outerApk, "outer")
 
             val candidate = resolveCandidate(outerApk, ctx)
-            Log.e(TAG, "selected candidate label=" + candidate.label)
-            Log.e(TAG, "selected candidate apk=" + candidate.apk.absolutePath)
-            Log.e(TAG, "selected candidate entry=" + candidate.entry)
+            Log.e(TAG, "selected candidate label=${candidate.label}")
+            Log.e(TAG, "selected candidate apk=${candidate.apk.absolutePath}")
+            Log.e(TAG, "selected candidate entry=${candidate.entry}")
 
             inspectDexFileClasses(candidate.apk, candidate.label)
             probeDexLoadClass(candidate.apk, candidate.entry, candidate.label)
@@ -109,10 +113,14 @@ object BridgeRuntime {
             probeDexLoadClass(rewrittenApk, candidate.entry, candidate.label + "-rewritten")
 
             val loaderResult = loadEntryClassWithStrategies(rewrittenApk, candidate.entry, ctx)
-            Log.e(TAG, "entry load strategy=" + loaderResult.strategy)
-            Log.e(TAG, "entryClassLoader=" + loaderResult.entryClass.classLoader)
-            Log.e(TAG, "entrySuper=" + loaderResult.entryClass.superclass?.name)
-            Log.e(TAG, "entryConstructorCount=" + loaderResult.entryClass.constructors.size)
+            Log.e(TAG, "entry load strategy=${loaderResult.strategy}")
+            Log.e(TAG, "entryClassLoader=${loaderResult.entryClass.classLoader}")
+            Log.e(TAG, "entrySuper=${loaderResult.entryClass.superclass?.name}")
+            Log.e(TAG, "entryConstructorCount=${loaderResult.entryClass.constructors.size}")
+
+            dumpClassAbi("runtimeXposedModule", XposedModule::class.java)
+            dumpClassAbi("entrySuperClass", loaderResult.entryClass.superclass)
+            dumpClassAbi("entryClass", loaderResult.entryClass)
 
             val runtimeInterfaceClass = XposedInterface::class.java
             val runtimeModuleLoadedParamClass = hostModuleLoadedParam.javaClass.interfaces.firstOrNull {
@@ -120,8 +128,8 @@ object BridgeRuntime {
                     ModuleLoadedParam::class.java.isAssignableFrom(it) ||
                     it.isAssignableFrom(ModuleLoadedParam::class.java)
             } ?: ModuleLoadedParam::class.java
-            Log.e(TAG, "runtimeInterfaceClass=" + runtimeInterfaceClass.name)
-            Log.e(TAG, "runtimeModuleLoadedParamClass=" + runtimeModuleLoadedParamClass.name)
+            Log.e(TAG, "runtimeInterfaceClass=${runtimeInterfaceClass.name}")
+            Log.e(TAG, "runtimeModuleLoadedParamClass=${runtimeModuleLoadedParamClass.name}")
 
             loaderResult.entryClass.constructors.forEachIndexed { index, ctor ->
                 val names = runCatching { ctor.parameterTypes.joinToString { it.name } }
@@ -143,8 +151,8 @@ object BridgeRuntime {
             }
             val pluginInterface = pluginParams[0]
             val pluginModuleLoadedParam = pluginParams[1]
-            Log.e(TAG, "selected ctor param0=" + pluginInterface.name)
-            Log.e(TAG, "selected ctor param1=" + pluginModuleLoadedParam.name)
+            Log.e(TAG, "selected ctor param0=${pluginInterface.name}")
+            Log.e(TAG, "selected ctor param1=${pluginModuleLoadedParam.name}")
 
             val interfaceProxy = Api100InterfaceProxy.create(pluginInterface, hostModule)
             val moduleLoadedParamProxy = PluginParamProxyFactory.create(
@@ -152,11 +160,16 @@ object BridgeRuntime {
                 hostModuleLoadedParam,
             )
 
-            val entryInstance = ctor.newInstance(interfaceProxy, moduleLoadedParamProxy)
+            val entryInstance = instantiateLegacyEntry(
+                ctor = ctor,
+                interfaceProxy = interfaceProxy,
+                moduleLoadedParamProxy = moduleLoadedParamProxy,
+            )
+
             val onPackageLoaded = loaderResult.entryClass.methods.firstOrNull {
                 it.name == "onPackageLoaded" && it.parameterTypes.size == 1
             }
-            Log.e(TAG, "onPackageLoaded method=" + onPackageLoaded)
+            Log.e(TAG, "onPackageLoaded method=$onPackageLoaded")
 
             LoadedPlugin(loaderResult.classLoader, entryInstance, onPackageLoaded).also {
                 loadedRef.set(it)
@@ -167,23 +180,137 @@ object BridgeRuntime {
         }
     }
 
+    private fun instantiateLegacyEntry(
+        ctor: Constructor<*>,
+        interfaceProxy: Any,
+        moduleLoadedParamProxy: Any,
+    ): Any {
+        return try {
+            ctor.isAccessible = true
+            ctor.newInstance(interfaceProxy, moduleLoadedParamProxy)
+        } catch (t: Throwable) {
+            val root = unwrapThrowable(t)
+            val chain = throwableChain(t)
+            val hitSuperCtorMismatch =
+                root is NoSuchMethodError ||
+                    chain.contains("No direct method <init>(") ||
+                    chain.contains("NoSuchMethodError")
+
+            if (!hitSuperCtorMismatch) {
+                throw t
+            }
+
+            Log.e(TAG, "ctor invoke hit super ctor mismatch, trying allocateInstance fallback: $chain", t)
+
+            val entryClass = ctor.declaringClass
+            val instance = allocateInstanceWithoutConstructor(entryClass)
+            primeRuntimeFields(instance, interfaceProxy, moduleLoadedParamProxy)
+            instance
+        }
+    }
+
+    private fun allocateInstanceWithoutConstructor(clazz: Class<*>): Any {
+        val attempts = listOf(
+            "sun.misc.Unsafe" to "theUnsafe",
+            "jdk.internal.misc.Unsafe" to "theUnsafe",
+        )
+
+        attempts.forEach { (className, fieldName) ->
+            runCatching {
+                val unsafeClass = Class.forName(className)
+                val unsafeField = unsafeClass.getDeclaredField(fieldName)
+                unsafeField.isAccessible = true
+                val unsafe = unsafeField.get(null)
+                val allocate = unsafeClass.getDeclaredMethod("allocateInstance", Class::class.java)
+                allocate.isAccessible = true
+                val instance = allocate.invoke(unsafe, clazz)
+                Log.e(TAG, "allocateInstance success via $className")
+                return instance
+            }.onFailure {
+                Log.e(TAG, "allocateInstance failed via $className: ${throwableChain(it)}")
+            }
+        }
+
+        error("allocateInstance failed for ${clazz.name}")
+    }
+
+    private fun primeRuntimeFields(
+        instance: Any,
+        interfaceProxy: Any,
+        moduleLoadedParamProxy: Any,
+    ) {
+        var hit = 0
+        walkClassHierarchy(instance.javaClass).forEach { owner ->
+            owner.declaredFields.forEach { field ->
+                if (Modifier.isStatic(field.modifiers)) return@forEach
+                runCatching {
+                    field.isAccessible = true
+                    when {
+                        field.type.isInstance(interfaceProxy) -> {
+                            field.set(instance, interfaceProxy)
+                            hit++
+                            Log.e(TAG, "primed field ${owner.name}#${field.name} with interfaceProxy")
+                        }
+                        field.type.isInstance(moduleLoadedParamProxy) -> {
+                            field.set(instance, moduleLoadedParamProxy)
+                            hit++
+                            Log.e(TAG, "primed field ${owner.name}#${field.name} with moduleLoadedParamProxy")
+                        }
+                    }
+                }.onFailure {
+                    Log.e(TAG, "prime field failed ${owner.name}#${field.name}: ${throwableChain(it)}", it)
+                }
+            }
+        }
+        Log.e(TAG, "primeRuntimeFields hitCount=$hit")
+    }
+
+    private fun walkClassHierarchy(start: Class<*>): List<Class<*>> {
+        val out = mutableListOf<Class<*>>()
+        var cur: Class<*>? = start
+        while (cur != null && cur != Any::class.java) {
+            out += cur
+            cur = cur.superclass
+        }
+        return out
+    }
+
+    private fun dumpClassAbi(label: String, clazz: Class<*>?) {
+        if (clazz == null) {
+            Log.e(TAG, "$label = <null>")
+            return
+        }
+        Log.e(TAG, "$label name=${clazz.name}")
+        clazz.declaredConstructors.forEachIndexed { index, ctor ->
+            val params = runCatching { ctor.parameterTypes.joinToString { it.name } }
+                .getOrElse { "<unavailable:${throwableChain(it)}>" }
+            Log.e(TAG, "$label ctor[$index] modifiers=${ctor.modifiers} params=$params")
+        }
+        clazz.declaredFields.forEachIndexed { index, field ->
+            Log.e(
+                TAG,
+                "$label field[$index] modifiers=${field.modifiers} name=${field.name} type=${field.type.name}",
+            )
+        }
+    }
+
     private fun resolveCandidate(outerApk: File, ctx: Context): Candidate {
         val outerEntry = readJavaInit(outerApk)
         val outerHas = hasDexClass(outerApk, outerEntry)
-        Log.e(TAG, "outerEntry=" + outerEntry)
-        Log.e(TAG, "outerHasClass=" + outerHas)
+        Log.e(TAG, "outerEntry=$outerEntry")
+        Log.e(TAG, "outerHasClass=$outerHas")
         if (!outerEntry.isNullOrBlank() && outerHas) {
             return Candidate(outerApk, outerEntry, "outer")
         }
 
         val innerApks = extractInnerApks(outerApk, ctx)
-        Log.e(TAG, "inner apk count=" + innerApks.size)
+        Log.e(TAG, "inner apk count=${innerApks.size}")
         innerApks.forEach { inner ->
             val entry = readJavaInit(inner)
             val has = hasDexClass(inner, entry)
-            Log.e(TAG, "inner apk=" + inner.absolutePath)
-            Log.e(TAG, "inner entry=" + entry)
-            Log.e(TAG, "inner hasClass=" + has)
+            Log.e(TAG, "inner apk=${inner.absolutePath}")
+            Log.e(TAG, "inner entry=$entry")
+            Log.e(TAG, "inner hasClass=$has")
             if (!entry.isNullOrBlank() && has) {
                 return Candidate(inner, entry, "inner")
             }
@@ -201,8 +328,8 @@ object BridgeRuntime {
         val outFile = File(rewriteDir, pluginApk.nameWithoutExtension + "-$label-rewritten.apk")
         val runtimeModuleClassName = XposedModule::class.java.name
         val rewritePairs = buildMinimalRewritePairs(runtimeModuleClassName)
-        Log.e(TAG, "runtime module class=" + runtimeModuleClassName)
-        Log.e(TAG, "rewrite pair count=" + rewritePairs.size)
+        Log.e(TAG, "runtime module class=$runtimeModuleClassName")
+        Log.e(TAG, "rewrite pair count=${rewritePairs.size}")
         rewritePairs.forEach { (oldValue, newValue) ->
             Log.e(TAG, "rewrite pair: $oldValue -> $newValue")
         }
@@ -327,7 +454,7 @@ object BridgeRuntime {
         runCatching {
             Log.e(TAG, "trying InMemoryDexClassLoader")
             val buffers = readAllDexBuffers(pluginApk)
-            Log.e(TAG, "creating InMemoryDexClassLoader, dexCount=" + buffers.size)
+            Log.e(TAG, "creating InMemoryDexClassLoader, dexCount=${buffers.size}")
             val loader = InMemoryDexClassLoader(buffers.toTypedArray(), parent)
             val entryClass = loader.loadClass(entryClassName)
             return LoaderResult(loader, entryClass, "InMemoryDexClassLoader")
@@ -367,7 +494,7 @@ object BridgeRuntime {
                     zip.getInputStream(entry).use { input ->
                         dest.outputStream().use { output -> input.copyTo(output) }
                     }
-                    Log.e(TAG, "extracted inner apk=" + dest.absolutePath)
+                    Log.e(TAG, "extracted inner apk=${dest.absolutePath}")
                     out += dest
                 }
             }
@@ -413,10 +540,10 @@ object BridgeRuntime {
                 .filter { !it.isDirectory && it.name.matches(Regex("classes(\\d*)\\.dex")) }
                 .sortedBy { dexOrder(it.name) }
                 .toList()
-            Log.e(TAG, "dex entries=" + dexEntries.joinToString { it.name })
+            Log.e(TAG, "dex entries=${dexEntries.joinToString { it.name }}")
             dexEntries.map { entry ->
                 val bytes = zip.getInputStream(entry).use { it.readBytes() }
-                Log.e(TAG, "dex entry ${entry.name} size=" + bytes.size)
+                Log.e(TAG, "dex entry ${entry.name} size=${bytes.size}")
                 ByteBuffer.wrap(bytes)
             }
         }
@@ -439,10 +566,10 @@ object BridgeRuntime {
             }
             dexFile.close()
 
-            Log.e(TAG, "dexfile[$label] class count=" + all.size)
-            Log.e(TAG, "dexfile[$label] ModuleMain class exists=" + all.contains("com.ss.android.ugc.awemes.ModuleMain"))
+            Log.e(TAG, "dexfile[$label] class count=${all.size}")
+            Log.e(TAG, "dexfile[$label] ModuleMain class exists=${all.contains("com.ss.android.ugc.awemes.ModuleMain")}")
             val awemes = all.filter { it.startsWith("com.ss.android.ugc.awemes") }.sorted().take(80)
-            Log.e(TAG, "dexfile[$label] awemes sample=" + awemes.joinToString())
+            Log.e(TAG, "dexfile[$label] awemes sample=${awemes.joinToString()}")
         }.onFailure {
             Log.e(TAG, "inspectDexFileClasses[$label] failed: ${throwableChain(it)}", it)
         }
@@ -455,7 +582,7 @@ object BridgeRuntime {
                 it.name == "loadClass" && it.parameterCount == 2
             } ?: error("DexFile.loadClass(String, ClassLoader) not found")
             val result = method.invoke(dexFile, className, hostModule.javaClass.classLoader)
-            Log.e(TAG, "dexfile[$label] reflective loadClass result=" + result)
+            Log.e(TAG, "dexfile[$label] reflective loadClass result=$result")
             dexFile.close()
         }.onFailure {
             Log.e(TAG, "probeDexLoadClass[$label] failed: ${throwableChain(it)}", it)
@@ -478,6 +605,17 @@ object BridgeRuntime {
             candidate.name.endsWith("$$fallbackSimpleName") ||
             candidate.isAssignableFrom(runtime) ||
             runtime.isAssignableFrom(candidate)
+    }
+
+    private fun unwrapThrowable(t: Throwable): Throwable {
+        var cur = t
+        while (true) {
+            val next = when (cur) {
+                is InvocationTargetException -> cur.targetException ?: cur.cause
+                else -> cur.cause
+            } ?: return cur
+            cur = next
+        }
     }
 
     private fun throwableChain(t: Throwable): String {
