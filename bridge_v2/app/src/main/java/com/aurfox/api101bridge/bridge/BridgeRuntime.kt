@@ -114,17 +114,37 @@ object BridgeRuntime {
             Log.e(TAG, "entrySuper=" + loaderResult.entryClass.superclass?.name)
             Log.e(TAG, "entryConstructorCount=" + loaderResult.entryClass.constructors.size)
 
-            val ctor = loaderResult.entryClass.constructors.firstOrNull { ctor ->
-                val params = ctor.parameterTypes
-                params.size == 2 &&
-                    params[0].simpleName == "XposedInterface" &&
-                    params[1].simpleName == "ModuleLoadedParam"
-            } ?: error("no 2-arg XposedInterface/ModuleLoadedParam constructor")
+            val runtimeInterfaceClass = XposedInterface::class.java
+            val runtimeModuleLoadedParamClass = hostModuleLoadedParam.javaClass.interfaces.firstOrNull {
+                it.name.endsWith("ModuleLoadedParam") ||
+                    ModuleLoadedParam::class.java.isAssignableFrom(it) ||
+                    it.isAssignableFrom(ModuleLoadedParam::class.java)
+            } ?: ModuleLoadedParam::class.java
+            Log.e(TAG, "runtimeInterfaceClass=" + runtimeInterfaceClass.name)
+            Log.e(TAG, "runtimeModuleLoadedParamClass=" + runtimeModuleLoadedParamClass.name)
 
-            val pluginInterface = ctor.parameterTypes[0]
-            val pluginModuleLoadedParam = ctor.parameterTypes[1]
-            Log.e(TAG, "ctor param0=" + pluginInterface.name)
-            Log.e(TAG, "ctor param1=" + pluginModuleLoadedParam.name)
+            loaderResult.entryClass.constructors.forEachIndexed { index, ctor ->
+                val names = runCatching { ctor.parameterTypes.joinToString { it.name } }
+                    .getOrElse { "<unavailable:${throwableChain(it)}>" }
+                Log.e(TAG, "ctor[$index] paramTypes=$names")
+            }
+
+            val ctor = loaderResult.entryClass.constructors.firstOrNull { ctor ->
+                val params = runCatching { ctor.parameterTypes.toList() }.getOrNull() ?: return@firstOrNull false
+                if (params.size != 2) return@firstOrNull false
+                matchesRuntimeType(params[0], runtimeInterfaceClass, "XposedInterface") &&
+                    matchesRuntimeType(params[1], runtimeModuleLoadedParamClass, "ModuleLoadedParam")
+            } ?: loaderResult.entryClass.constructors.firstOrNull { ctor ->
+                runCatching { ctor.parameterTypes.size == 2 }.getOrDefault(false)
+            } ?: error("no usable 2-arg constructor")
+
+            val pluginParams = runCatching { ctor.parameterTypes }.getOrElse {
+                error("resolved constructor parameterTypes unavailable: ${throwableChain(it)}")
+            }
+            val pluginInterface = pluginParams[0]
+            val pluginModuleLoadedParam = pluginParams[1]
+            Log.e(TAG, "selected ctor param0=" + pluginInterface.name)
+            Log.e(TAG, "selected ctor param1=" + pluginModuleLoadedParam.name)
 
             val interfaceProxy = Api100InterfaceProxy.create(pluginInterface, hostModule)
             val moduleLoadedParamProxy = PluginParamProxyFactory.create(
@@ -448,6 +468,16 @@ object BridgeRuntime {
             val currentApplicationMethod = activityThreadClass.getDeclaredMethod("currentApplication")
             currentApplicationMethod.invoke(null) as? Context
         }.getOrNull()
+    }
+
+    private fun matchesRuntimeType(candidate: Class<*>, runtime: Class<*>, fallbackSimpleName: String): Boolean {
+        return candidate == runtime ||
+            candidate.name == runtime.name ||
+            candidate.simpleName == fallbackSimpleName ||
+            candidate.name.endsWith(".$fallbackSimpleName") ||
+            candidate.name.endsWith("$$fallbackSimpleName") ||
+            candidate.isAssignableFrom(runtime) ||
+            runtime.isAssignableFrom(candidate)
     }
 
     private fun throwableChain(t: Throwable): String {
