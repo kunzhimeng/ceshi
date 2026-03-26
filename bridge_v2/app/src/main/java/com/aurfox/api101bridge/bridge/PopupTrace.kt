@@ -228,10 +228,14 @@ object PopupTrace {
             TraceLog.log(logTag, "POPUP_TRACE aweme-app.xml missing reason=" + reason)
             return
         }
+
         val current = parseSimplePrefsXml(xmlFile)
         if (awemeXmlSnapshot.isEmpty()) {
             awemeXmlSnapshot = current
             TraceLog.log(logTag, "POPUP_TRACE aweme-app snapshot init size=" + current.size + " reason=" + reason)
+            current.entries.take(20).forEach { (k, v) ->
+                TraceLog.log(logTag, "POPUP_TRACE aweme-app INIT " + k + "=" + shorten(v))
+            }
             return
         }
 
@@ -240,23 +244,25 @@ object PopupTrace {
         current.forEach { (k, v) ->
             val old = awemeXmlSnapshot[k]
             if (old == null) {
-                if (interestingKey(k)) changed += "ADD $k=$v"
+                changed += "ADD " + k + "=" + shorten(v)
             } else if (old != v) {
-                if (interestingKey(k)) changed += "CHG $k: $old -> $v"
+                changed += "CHG " + k + ": " + shorten(old) + " -> " + shorten(v)
             }
         }
 
         awemeXmlSnapshot.keys.forEach { k ->
-            if (!current.containsKey(k) && interestingKey(k)) {
-                changed += "DEL $k"
+            if (!current.containsKey(k)) {
+                changed += "DEL " + k
             }
         }
 
         if (changed.isNotEmpty()) {
             TraceLog.log(logTag, "POPUP_TRACE aweme-app diff reason=" + reason + " count=" + changed.size)
-            changed.take(30).forEach { item ->
+            changed.sorted().take(80).forEach { item ->
                 TraceLog.log(logTag, "POPUP_TRACE aweme-app " + item)
             }
+        } else {
+            TraceLog.log(logTag, "POPUP_TRACE aweme-app diff reason=" + reason + " count=0")
         }
 
         awemeXmlSnapshot = current
@@ -288,17 +294,7 @@ object PopupTrace {
         return out
     }
 
-    private fun interestingKey(key: String): Boolean {
-        val k = key.lowercase(Locale.US)
-        return k.contains("card") ||
-            k.contains("code") ||
-            k.contains("key") ||
-            k.contains("license") ||
-            k.contains("active") ||
-            k.contains("auth") ||
-            k.contains("vip") ||
-            k.contains("dialog") ||
-            k.contains("popup") ||
-            k.contains("verify")
+    private fun shorten(value: String): String {
+        return if (value.length <= 120) value else value.take(120) + "...(" + value.length + ")"
     }
 }
