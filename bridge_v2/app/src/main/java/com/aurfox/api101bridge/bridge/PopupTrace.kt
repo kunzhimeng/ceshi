@@ -161,6 +161,9 @@ object PopupTrace {
                 val file = if (path != null) File(dir, path) else null
                 val size = file?.takeIf { it.exists() }?.length()?.toString() ?: "<na>"
                 TraceLog.log(logTag, "POPUP_TRACE file[$label] event=$event path=$name size=$size")
+                if (path != null && label == "databases" && isInterestingDbFile(path)) {
+                    onInterestingDbChanged(logTag, label, dir, path)
+                }
                 if (path != null) {
                     onChange?.invoke(path)
                 }
@@ -264,14 +267,48 @@ object PopupTrace {
         }
     }
 
+
+    private fun isInterestingDbFile(name: String): Boolean {
+        val n = name.lowercase(Locale.US)
+        return n == "verifystorage.db" ||
+            n == "verifystorage.db-wal" ||
+            n == "verifystorage.db-shm" ||
+            n == "pz_database" ||
+            n == "pz_database-wal" ||
+            n == "pz_database-shm"
+    }
+
+    private fun onInterestingDbChanged(logTag: String, label: String, dir: File, path: String) {
+        val file = File(dir, path)
+        val size = if (file.exists()) file.length() else -1L
+        TraceLog.log(
+            logTag,
+            "POPUP_TRACE interesting-db[$label] path=" + path +
+                " size=" + size +
+                " exists=" + file.exists()
+        )
+        val activity = currentActivityRef.get()?.get()
+        TraceLog.log(
+            logTag,
+            "POPUP_TRACE interesting-db[$label] currentActivity=" +
+                (activity?.javaClass?.name ?: "<null>")
+        )
+        dumpWindowRoots(logTag)
+    }
+
     private fun dumpDir(logTag: String, label: String, dir: File) {
         val files = dir.listFiles()?.sortedBy { it.name }.orEmpty()
         TraceLog.log(logTag, "POPUP_TRACE storage[$label] dir=" + dir.absolutePath + " count=" + files.size)
-        files.take(20).forEach { file ->
+        files.take(40).forEach { file ->
             val ts = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date(file.lastModified()))
+            val prefix = if (label == "databases" && isInterestingDbFile(file.name)) {
+                "POPUP_TRACE storage[$label] IMPORTANT file="
+            } else {
+                "POPUP_TRACE storage[$label] file="
+            }
             TraceLog.log(
                 logTag,
-                "POPUP_TRACE storage[$label] file=" + file.name +
+                prefix + file.name +
                     " size=" + file.length() +
                     " mtime=" + ts
             )
