@@ -66,7 +66,7 @@ object BridgeRuntime {
 
     @JvmStatic
     fun dispatchPackageLoaded(param: PackageLoadedParam) {
-    Log.e(TAG, "PROBE-0326-NATIVE-LIB-908")
+    Log.e(TAG, "PROBE-0326-NATIVE-LIB-909")
     val loaded = ensureLoaded(param) ?: run {
         Log.e(TAG, "ensureLoaded returned null")
         return
@@ -133,10 +133,7 @@ object BridgeRuntime {
             logTag = TAG,
         )
         Log.e(TAG, "native lib dir=" + nativeLibDir.absolutePath)
-        NativeLibExtractor.preloadNativeLibs(
-            nativeLibDir = nativeLibDir,
-            logTag = TAG,
-        )
+        Log.e(TAG, "native preload disabled; relying on DexClassLoader native path only")
 
         val loaderResult = loadEntryClassWithStrategies(
             pluginApk = ctorPatchedApk,
