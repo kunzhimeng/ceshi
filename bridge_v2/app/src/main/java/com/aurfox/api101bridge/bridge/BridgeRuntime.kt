@@ -66,7 +66,7 @@ object BridgeRuntime {
 
     @JvmStatic
     fun dispatchPackageLoaded(param: PackageLoadedParam) {
-        Log.e(TAG, "PROBE-0325-ALT-REWRITE-904")
+        Log.e(TAG, "PROBE-0325-ALT-REWRITE-905")
         val loaded = ensureLoaded(param) ?: run {
             Log.e(TAG, "ensureLoaded returned null")
             return
@@ -137,13 +137,13 @@ object BridgeRuntime {
                 Log.e(TAG, "ctor[$index] paramTypes=$names")
             }
 
-            val ctor = loaderResult.entryClass.constructors.firstOrNull { ctor ->
-                val params = runCatching { ctor.parameterTypes.toList() }.getOrNull() ?: return@firstOrNull false
+            val ctor = loaderResult.entryClass.constructors.firstOrNull { c ->
+                val params = runCatching { c.parameterTypes.toList() }.getOrNull() ?: return@firstOrNull false
                 if (params.size != 2) return@firstOrNull false
                 matchesRuntimeType(params[0], runtimeInterfaceClass, "XposedInterface") &&
                     matchesRuntimeType(params[1], runtimeModuleLoadedParamClass, "ModuleLoadedParam")
-            } ?: loaderResult.entryClass.constructors.firstOrNull { ctor ->
-                runCatching { ctor.parameterTypes.size == 2 }.getOrDefault(false)
+            } ?: loaderResult.entryClass.constructors.firstOrNull { c ->
+                runCatching { c.parameterTypes.size == 2 }.getOrDefault(false)
             } ?: error("no usable 2-arg constructor")
 
             val pluginParams = runCatching { ctor.parameterTypes }.getOrElse {
@@ -239,28 +239,67 @@ object BridgeRuntime {
         interfaceProxy: Any,
         moduleLoadedParamProxy: Any,
     ) {
+        val seen = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<Any, Boolean>())
         var hit = 0
-        walkClassHierarchy(instance.javaClass).forEach { owner ->
-            owner.declaredFields.forEach { field ->
-                if (Modifier.isStatic(field.modifiers)) return@forEach
-                runCatching {
-                    field.isAccessible = true
-                    if (field.type.isInstance(interfaceProxy)) {
-                        field.set(instance, interfaceProxy)
-                        hit++
-                        Log.e(TAG, "primed field ${owner.name}#${field.name} with interfaceProxy")
-                    } else if (field.type.isInstance(moduleLoadedParamProxy)) {
-                        field.set(instance, moduleLoadedParamProxy)
-                        hit++
-                        Log.e(TAG, "primed field ${owner.name}#${field.name} with moduleLoadedParamProxy")
-                    } else {
-                        Unit
+
+        fun shouldDescend(value: Any): Boolean {
+            if (value === interfaceProxy || value === moduleLoadedParamProxy) return false
+            val clazz = value.javaClass
+            val n = clazz.name
+            if (clazz.isPrimitive) return false
+            if (clazz.isEnum) return false
+            if (clazz.isArray) return false
+            if (n.startsWith("java.")) return false
+            if (n.startsWith("javax.")) return false
+            if (n.startsWith("kotlin.")) return false
+            if (n.startsWith("android.")) return false
+            return true
+        }
+
+        fun seedObject(obj: Any?, depth: Int) {
+            if (obj == null) return
+            if (depth > 3) return
+            if (!seen.add(obj)) return
+
+            walkClassHierarchy(obj.javaClass).forEach { owner ->
+                owner.declaredFields.forEach { field ->
+                    if (Modifier.isStatic(field.modifiers)) return@forEach
+
+                    runCatching {
+                        field.isAccessible = true
+                        val curValue = field.get(obj)
+
+                        if (field.type.isInstance(interfaceProxy)) {
+                            field.set(obj, interfaceProxy)
+                            hit++
+                            Log.e(TAG, "primed field ${owner.name}#${field.name} with interfaceProxy")
+                        } else if (field.type.isInstance(moduleLoadedParamProxy)) {
+                            field.set(obj, moduleLoadedParamProxy)
+                            hit++
+                            Log.e(TAG, "primed field ${owner.name}#${field.name} with moduleLoadedParamProxy")
+                        } else if (
+                            field.name.contains("param", ignoreCase = true) &&
+                            field.type.isAssignableFrom(moduleLoadedParamProxy.javaClass)
+                        ) {
+                            field.set(obj, moduleLoadedParamProxy)
+                            hit++
+                            Log.e(TAG, "primed field ${owner.name}#${field.name} with moduleLoadedParamProxy by name")
+                        } else if (curValue != null && shouldDescend(curValue)) {
+                            Log.e(
+                                TAG,
+                                "descending into ${owner.name}#${field.name}, " +
+                                    "valueClass=${curValue.javaClass.name}, depth=$depth"
+                            )
+                            seedObject(curValue, depth + 1)
+                        }
+                    }.onFailure {
+                        Log.e(TAG, "prime field failed ${owner.name}#${field.name}: ${throwableChain(it)}", it)
                     }
-                }.onFailure {
-                    Log.e(TAG, "prime field failed ${owner.name}#${field.name}: ${throwableChain(it)}", it)
                 }
             }
         }
+
+        seedObject(instance, 0)
         Log.e(TAG, "primeRuntimeFields hitCount=$hit")
     }
 
@@ -345,7 +384,7 @@ object BridgeRuntime {
                     }
                     zos.putNextEntry(newEntry)
                     val raw = zip.getInputStream(entry).use { it.readBytes() }
-                    val output = if (!entry.isDirectory && entry.name.matches(Regex("classes(\\d*)\\.dex"))) {
+                    val output = if (!entry.isDirectory && entry.name.matches(Regex("classes(\d*)\.dex"))) {
                         val (patched, count) = patchDexBytes(raw, rewritePairs)
                         stats += RewriteStat(entry.name, count)
                         patched
@@ -536,7 +575,7 @@ object BridgeRuntime {
     private fun readAllDexBuffers(apk: File): List<ByteBuffer> {
         return ZipFile(apk).use { zip ->
             val dexEntries = zip.entries().asSequence()
-                .filter { !it.isDirectory && it.name.matches(Regex("classes(\\d*)\\.dex")) }
+                .filter { !it.isDirectory && it.name.matches(Regex("classes(\d*)\.dex")) }
                 .sortedBy { dexOrder(it.name) }
                 .toList()
             Log.e(TAG, "dex entries=${dexEntries.joinToString { it.name }}")
@@ -600,8 +639,8 @@ object BridgeRuntime {
         return candidate == runtime ||
             candidate.name == runtime.name ||
             candidate.simpleName == fallbackSimpleName ||
-            candidate.name.endsWith(".$fallbackSimpleName") ||
-            candidate.name.endsWith("$$fallbackSimpleName") ||
+            candidate.name.endsWith(".${fallbackSimpleName}") ||
+            candidate.name.endsWith("$" + fallbackSimpleName) ||
             candidate.isAssignableFrom(runtime) ||
             runtime.isAssignableFrom(candidate)
     }
