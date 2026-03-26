@@ -41,4 +41,8 @@ dependencies {
 
     // Current modern Xposed API line.
     compileOnly("io.github.libxposed:api:101.0.0")
+
+    // v10 constructor-patch route.
+    // This is the current Google-smali dexlib2 line, published to Google's repository.
+    implementation("com.android.tools.smali:smali-dexlib2:3.0.9")
 }
