@@ -133,6 +133,10 @@ object BridgeRuntime {
             logTag = TAG,
         )
         Log.e(TAG, "native lib dir=" + nativeLibDir.absolutePath)
+        NativeLibExtractor.preloadNativeLibs(
+            nativeLibDir = nativeLibDir,
+            logTag = TAG,
+        )
 
         val loaderResult = loadEntryClassWithStrategies(
             pluginApk = ctorPatchedApk,
