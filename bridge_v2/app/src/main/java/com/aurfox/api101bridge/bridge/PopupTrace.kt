@@ -4,6 +4,7 @@ import android.app.Activity
 import android.app.Application
 import android.content.Context
 import android.os.Bundle
+import android.os.FileObserver
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
@@ -20,9 +21,10 @@ import java.util.concurrent.atomic.AtomicReference
 
 object PopupTrace {
     private val started = AtomicBoolean(false)
-    private val tracing = AtomicBoolean(false)
+    private val polling = AtomicBoolean(false)
     private val currentActivityRef = AtomicReference<WeakReference<Activity>?>(null)
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val observers = mutableListOf<FileObserver>()
     private var pollCount = 0
 
     @JvmStatic
@@ -69,7 +71,10 @@ object PopupTrace {
             }
         })
 
-        if (tracing.compareAndSet(false, true)) {
+        attachFileObserver(logTag, "shared_prefs", File(app.applicationInfo.dataDir, "shared_prefs"))
+        attachFileObserver(logTag, "mmkv", File(app.filesDir, "mmkv"))
+
+        if (polling.compareAndSet(false, true)) {
             schedule(app, logTag)
         }
     }
@@ -87,7 +92,7 @@ object PopupTrace {
                 } catch (t: Throwable) {
                     Log.e(logTag, "POPUP_TRACE poll failed: ${t.javaClass.simpleName}: ${t.message}", t)
                 }
-                if (pollCount < 30) {
+                if (pollCount < 45) {
                     mainHandler.postDelayed(this, 1000L)
                 } else {
                     Log.e(logTag, "POPUP_TRACE poll finished")
@@ -105,8 +110,27 @@ object PopupTrace {
         )
         dumpWindowRoots(logTag)
         if (pollCount == 1 || pollCount % 5 == 0) {
-            dumpStorage(logTag, app)
+            dumpDir(logTag, "shared_prefs", File(app.applicationInfo.dataDir, "shared_prefs"))
+            dumpDir(logTag, "mmkv", File(app.filesDir, "mmkv"))
         }
+    }
+
+    private fun attachFileObserver(logTag: String, label: String, dir: File) {
+        if (!dir.exists()) {
+            Log.e(logTag, "POPUP_TRACE observer[$label] missingDir=" + dir.absolutePath)
+            return
+        }
+        val mask = FileObserver.CREATE or FileObserver.MODIFY or FileObserver.CLOSE_WRITE or
+            FileObserver.MOVED_TO or FileObserver.DELETE
+        val observer = object : FileObserver(dir, mask) {
+            override fun onEvent(event: Int, path: String?) {
+                val name = path ?: "<null>"
+                Log.e(logTag, "POPUP_TRACE file[$label] event=$event path=$name")
+            }
+        }
+        observer.startWatching()
+        observers += observer
+        Log.e(logTag, "POPUP_TRACE observer[$label] start dir=" + dir.absolutePath)
     }
 
     private fun dumpWindowRoots(logTag: String) {
@@ -146,8 +170,8 @@ object PopupTrace {
             if (view is TextView) {
                 val text = view.text?.toString()?.trim().orEmpty()
                 val hint = view.hint?.toString()?.trim().orEmpty()
-                if (text.isNotEmpty()) out += text.take(60)
-                if (hint.isNotEmpty()) out += ("hint:" + hint.take(60))
+                if (text.isNotEmpty()) out += text.take(80)
+                if (hint.isNotEmpty()) out += ("hint:" + hint.take(80))
             }
             if (view is ViewGroup) {
                 for (i in 0 until view.childCount) {
@@ -158,11 +182,6 @@ object PopupTrace {
 
         walk(root, 0)
         return if (out.isEmpty()) "<no-text>" else out.joinToString(" | ")
-    }
-
-    private fun dumpStorage(logTag: String, app: Application) {
-        dumpDir(logTag, "shared_prefs", File(app.applicationInfo.dataDir, "shared_prefs"))
-        dumpDir(logTag, "mmkv", File(app.filesDir, "mmkv"))
     }
 
     private fun dumpDir(logTag: String, label: String, dir: File) {
