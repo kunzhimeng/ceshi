@@ -71,8 +71,13 @@ object PopupTrace {
             }
         })
 
-        val sharedPrefsDir = File(app.applicationInfo.dataDir, "shared_prefs")
+        val dataDir = File(app.applicationInfo.dataDir)
+        val sharedPrefsDir = File(dataDir, "shared_prefs")
         val mmkvDir = File(app.filesDir, "mmkv")
+        val filesDir = app.filesDir
+        val cacheDir = app.cacheDir
+        val databasesDir = File(dataDir, "databases")
+
         attachFileObserver(logTag, "shared_prefs", sharedPrefsDir) { changed ->
             if (changed == "aweme-app.xml") {
                 dumpAwemePrefsDiff(logTag, File(sharedPrefsDir, "aweme-app.xml"), "fileObserver")
@@ -80,6 +85,9 @@ object PopupTrace {
             }
         }
         attachFileObserver(logTag, "mmkv", mmkvDir, null)
+        attachFileObserver(logTag, "files", filesDir, null)
+        attachFileObserver(logTag, "cache", cacheDir, null)
+        attachFileObserver(logTag, "databases", databasesDir, null)
 
         dumpAwemePrefsDiff(logTag, File(sharedPrefsDir, "aweme-app.xml"), "start")
 
@@ -128,6 +136,9 @@ object PopupTrace {
         if (pollCount == 1 || pollCount % 5 == 0) {
             dumpDir(logTag, "shared_prefs", sharedPrefsDir)
             dumpDir(logTag, "mmkv", mmkvDir)
+            dumpDir(logTag, "files", app.filesDir)
+            dumpDir(logTag, "cache", app.cacheDir)
+            dumpDir(logTag, "databases", File(app.applicationInfo.dataDir, "databases"))
             dumpAwemePrefsDiff(logTag, File(sharedPrefsDir, "aweme-app.xml"), "poll")
         }
     }
@@ -147,7 +158,9 @@ object PopupTrace {
         val observer = object : FileObserver(dir, mask) {
             override fun onEvent(event: Int, path: String?) {
                 val name = path ?: "<null>"
-                TraceLog.log(logTag, "POPUP_TRACE file[$label] event=$event path=$name")
+                val file = if (path != null) File(dir, path) else null
+                val size = file?.takeIf { it.exists() }?.length()?.toString() ?: "<na>"
+                TraceLog.log(logTag, "POPUP_TRACE file[$label] event=$event path=$name size=$size")
                 if (path != null) {
                     onChange?.invoke(path)
                 }
@@ -184,6 +197,7 @@ object PopupTrace {
                     " title=" + title +
                     " text=" + snippet
             )
+            dumpControlSnapshot(logTag, index, view)
         }
     }
 
@@ -207,6 +221,47 @@ object PopupTrace {
 
         walk(root, 0)
         return if (out.isEmpty()) "<no-text>" else out.joinToString(" | ")
+    }
+
+
+    private fun dumpControlSnapshot(logTag: String, windowIndex: Int, root: View) {
+        val controls = mutableListOf<String>()
+
+        fun walk(view: View, depth: Int) {
+            if (depth > 6 || controls.size >= 40) return
+
+            val className = view.javaClass.simpleName
+            val idName = runCatching {
+                if (view.id != View.NO_ID) {
+                    view.resources.getResourceEntryName(view.id)
+                } else null
+            }.getOrNull() ?: "<no-id>"
+
+            when (view) {
+                is TextView -> {
+                    val text = view.text?.toString()?.trim().orEmpty()
+                    val hint = view.hint?.toString()?.trim().orEmpty()
+                    controls += "TextView class=$className id=$idName text=" + shorten(text) + " hint=" + shorten(hint)
+                }
+            }
+
+            if (view is ViewGroup) {
+                for (i in 0 until view.childCount) {
+                    walk(view.getChildAt(i), depth + 1)
+                }
+            }
+        }
+
+        walk(root, 0)
+
+        if (controls.isEmpty()) {
+            TraceLog.log(logTag, "POPUP_TRACE controls[$windowIndex] count=0")
+        } else {
+            TraceLog.log(logTag, "POPUP_TRACE controls[$windowIndex] count=" + controls.size)
+            controls.take(40).forEach { item ->
+                TraceLog.log(logTag, "POPUP_TRACE controls[$windowIndex] " + item)
+            }
+        }
     }
 
     private fun dumpDir(logTag: String, label: String, dir: File) {
