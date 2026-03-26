@@ -291,6 +291,8 @@ object BridgeRuntime {
                                     "valueClass=${curValue.javaClass.name}, depth=$depth"
                             )
                             seedObject(curValue, depth + 1)
+                        } else {
+                            Unit
                         }
                     }.onFailure {
                         Log.e(TAG, "prime field failed ${owner.name}#${field.name}: ${throwableChain(it)}", it)
@@ -384,7 +386,7 @@ object BridgeRuntime {
                     }
                     zos.putNextEntry(newEntry)
                     val raw = zip.getInputStream(entry).use { it.readBytes() }
-                    val output = if (!entry.isDirectory && entry.name.matches(Regex("classes(\d*)\.dex"))) {
+                    val output = if (!entry.isDirectory && entry.name.matches(Regex("classes(\\d*)\\.dex"))) {
                         val (patched, count) = patchDexBytes(raw, rewritePairs)
                         stats += RewriteStat(entry.name, count)
                         patched
@@ -575,7 +577,7 @@ object BridgeRuntime {
     private fun readAllDexBuffers(apk: File): List<ByteBuffer> {
         return ZipFile(apk).use { zip ->
             val dexEntries = zip.entries().asSequence()
-                .filter { !it.isDirectory && it.name.matches(Regex("classes(\d*)\.dex")) }
+                .filter { !it.isDirectory && it.name.matches(Regex("classes(\\d*)\\.dex")) }
                 .sortedBy { dexOrder(it.name) }
                 .toList()
             Log.e(TAG, "dex entries=${dexEntries.joinToString { it.name }}")
