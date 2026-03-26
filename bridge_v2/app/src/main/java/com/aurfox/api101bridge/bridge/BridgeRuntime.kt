@@ -66,7 +66,7 @@ object BridgeRuntime {
 
     @JvmStatic
     fun dispatchPackageLoaded(param: PackageLoadedParam) {
-    Log.e(TAG, "PROBE-0326-CTOR-PATCH-907")
+    Log.e(TAG, "PROBE-0326-NATIVE-LIB-908")
     val loaded = ensureLoaded(param) ?: run {
         Log.e(TAG, "ensureLoaded returned null")
         return
@@ -126,7 +126,20 @@ object BridgeRuntime {
         inspectDexFileClasses(ctorPatchedApk, candidate.label + "-ctorpatched")
         probeDexLoadClass(ctorPatchedApk, candidate.entry, candidate.label + "-ctorpatched")
 
-        val loaderResult = loadEntryClassWithStrategies(ctorPatchedApk, candidate.entry, ctx)
+        val nativeLibDir = NativeLibExtractor.extractNativeLibs(
+            sourceApk = ctorPatchedApk,
+            ctx = ctx,
+            label = candidate.label,
+            logTag = TAG,
+        )
+        Log.e(TAG, "native lib dir=" + nativeLibDir.absolutePath)
+
+        val loaderResult = loadEntryClassWithStrategies(
+            pluginApk = ctorPatchedApk,
+            entryClassName = candidate.entry,
+            ctx = ctx,
+            nativeLibDir = nativeLibDir,
+        )
         Log.e(TAG, "entry load strategy=${loaderResult.strategy}")
         Log.e(TAG, "entryClassLoader=${loaderResult.entryClass.classLoader}")
         Log.e(TAG, "entrySuper=${loaderResult.entryClass.superclass?.name}")
@@ -598,13 +611,31 @@ object BridgeRuntime {
         pluginApk: File,
         entryClassName: String,
         ctx: Context,
+        nativeLibDir: File,
     ): LoaderResult {
         val parent = hostModule.javaClass.classLoader
+        val nativePath = nativeLibDir.absolutePath
         Log.e(TAG, "load parent=$parent")
+        Log.e(TAG, "native library search path=$nativePath")
 
         runCatching {
-            Log.e(TAG, "trying PathClassLoader")
-            val loader = PathClassLoader(pluginApk.absolutePath, parent)
+            Log.e(TAG, "trying DexClassLoader with native path")
+            val optimizedDir = File(ctx.cacheDir, "bridge_dex").apply { mkdirs() }
+            val loader = DexClassLoader(
+                pluginApk.absolutePath,
+                optimizedDir.absolutePath,
+                nativePath,
+                parent,
+            )
+            val entryClass = loader.loadClass(entryClassName)
+            return LoaderResult(loader, entryClass, "DexClassLoader")
+        }.onFailure {
+            Log.e(TAG, "DexClassLoader failed: ${throwableChain(it)}", it)
+        }
+
+        runCatching {
+            Log.e(TAG, "trying PathClassLoader with native path")
+            val loader = PathClassLoader(pluginApk.absolutePath, nativePath, parent)
             val entryClass = loader.loadClass(entryClassName)
             return LoaderResult(loader, entryClass, "PathClassLoader")
         }.onFailure {
@@ -620,21 +651,6 @@ object BridgeRuntime {
             return LoaderResult(loader, entryClass, "InMemoryDexClassLoader")
         }.onFailure {
             Log.e(TAG, "InMemoryDexClassLoader failed: ${throwableChain(it)}", it)
-        }
-
-        runCatching {
-            Log.e(TAG, "trying DexClassLoader")
-            val optimizedDir = File(ctx.cacheDir, "bridge_dex").apply { mkdirs() }
-            val loader = DexClassLoader(
-                pluginApk.absolutePath,
-                optimizedDir.absolutePath,
-                pluginApk.parentFile?.absolutePath,
-                parent,
-            )
-            val entryClass = loader.loadClass(entryClassName)
-            return LoaderResult(loader, entryClass, "DexClassLoader")
-        }.onFailure {
-            Log.e(TAG, "DexClassLoader failed: ${throwableChain(it)}", it)
         }
 
         error("all loader strategies failed for $entryClassName")
