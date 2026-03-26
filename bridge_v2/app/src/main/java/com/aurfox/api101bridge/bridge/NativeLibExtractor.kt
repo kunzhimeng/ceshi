@@ -4,7 +4,6 @@ import android.content.Context
 import android.os.Build
 import android.util.Log
 import java.io.File
-import java.util.LinkedHashSet
 import java.util.zip.ZipFile
 
 object NativeLibExtractor {
@@ -69,6 +68,37 @@ object NativeLibExtractor {
             "native extraction finished: selectedAbi=$selectedAbi, extracted=$extracted, dir=${abiDir.absolutePath}"
         )
         return abiDir
+    }
+
+    @JvmStatic
+    fun preloadNativeLibs(
+        nativeLibDir: File,
+        logTag: String,
+    ) {
+        val libs = nativeLibDir.listFiles { f ->
+            f.isFile && f.name.endsWith(".so")
+        }?.sortedWith(compareBy<File> {
+            when {
+                it.name.contains("mmkv", ignoreCase = true) -> 0
+                it.name.contains("dexkit", ignoreCase = true) -> 1
+                it.name.contains("native", ignoreCase = true) -> 2
+                else -> 3
+            }
+        }).orEmpty()
+
+        libs.forEach { so ->
+            runCatching {
+                Log.e(logTag, "native preload try: " + so.absolutePath)
+                System.load(so.absolutePath)
+                Log.e(logTag, "native preload ok: " + so.name)
+            }.onFailure {
+                Log.e(
+                    logTag,
+                    "native preload failed: " + so.name + ": " + it.javaClass.simpleName + ": " + it.message,
+                    it
+                )
+            }
+        }
     }
 
     private fun selectAbi(
