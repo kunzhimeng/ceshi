@@ -66,7 +66,7 @@ object BridgeRuntime {
 
     @JvmStatic
     fun dispatchPackageLoaded(param: PackageLoadedParam) {
-    Log.e(TAG, "PROBE-0326-POPUP-TRACE-911")
+    Log.e(TAG, "PROBE-0326-FILE-TRACE-913")
     val loaded = ensureLoaded(param) ?: run {
         Log.e(TAG, "ensureLoaded returned null")
         return
@@ -77,10 +77,12 @@ object BridgeRuntime {
             ?: error("onPackageLoaded parameter type unavailable")
         val pluginParam = PluginParamProxyFactory.create(pluginPackageLoadedParam, param)
         Log.e(TAG, "about to invoke legacy onPackageLoaded with paramType=${pluginPackageLoadedParam.name}")
+        TraceLog.log(TAG, "about to invoke legacy onPackageLoaded with paramType=${pluginPackageLoadedParam.name}")
         PopupTrace.note("before legacy onPackageLoaded", TAG)
         val onPackageLoaded = loaded.onPackageLoaded ?: error("onPackageLoaded method missing")
         onPackageLoaded.invoke(loaded.entryInstance, pluginParam)
         Log.e(TAG, "legacy onPackageLoaded invoked")
+        TraceLog.log(TAG, "legacy onPackageLoaded invoked")
         PopupTrace.note("after legacy onPackageLoaded", TAG)
     }.onFailure {
         Log.e(TAG, "dispatchPackageLoaded failed: ${throwableChain(it)}", it)
@@ -96,6 +98,8 @@ object BridgeRuntime {
             return null
         }
         Log.e("API101BridgeV2", "currentApplicationContext=${ctx.packageName}")
+        TraceLog.init(ctx, TAG)
+        TraceLog.log(TAG, "file trace enabled for " + ctx.packageName)
         PopupTrace.start(ctx, TAG)
 
         val outerApk = PluginStorage.materializeBundledPlugin(ctx, HOST_PACKAGE)
