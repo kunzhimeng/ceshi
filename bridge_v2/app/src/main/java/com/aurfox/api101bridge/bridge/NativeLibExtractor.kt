@@ -75,30 +75,12 @@ object NativeLibExtractor {
         nativeLibDir: File,
         logTag: String,
     ) {
-        val libs = nativeLibDir.listFiles { f ->
-            f.isFile && f.name.endsWith(".so")
-        }?.sortedWith(compareBy<File> {
-            when {
-                it.name.contains("mmkv", ignoreCase = true) -> 0
-                it.name.contains("dexkit", ignoreCase = true) -> 1
-                it.name.contains("native", ignoreCase = true) -> 2
-                else -> 3
+        nativeLibDir.listFiles()
+            ?.filter { it.isFile && it.name.endsWith(".so") }
+            ?.sortedBy { it.name }
+            ?.forEach { so ->
+                Log.e(logTag, "native preload skipped: " + so.absolutePath)
             }
-        }).orEmpty()
-
-        libs.forEach { so ->
-            runCatching {
-                Log.e(logTag, "native preload try: " + so.absolutePath)
-                System.load(so.absolutePath)
-                Log.e(logTag, "native preload ok: " + so.name)
-            }.onFailure {
-                Log.e(
-                    logTag,
-                    "native preload failed: " + so.name + ": " + it.javaClass.simpleName + ": " + it.message,
-                    it
-                )
-            }
-        }
     }
 
     private fun selectAbi(
