@@ -66,7 +66,7 @@ object BridgeRuntime {
 
     @JvmStatic
     fun dispatchPackageLoaded(param: PackageLoadedParam) {
-    Log.e(TAG, "PROBE-0325-ALT-REWRITE-906")
+    Log.e(TAG, "PROBE-0326-CTOR-PATCH-907")
     val loaded = ensureLoaded(param) ?: run {
         Log.e(TAG, "ensureLoaded returned null")
         return
@@ -114,7 +114,19 @@ object BridgeRuntime {
         inspectDexFileClasses(rewrittenApk, candidate.label + "-rewritten")
         probeDexLoadClass(rewrittenApk, candidate.entry, candidate.label + "-rewritten")
 
-        val loaderResult = loadEntryClassWithStrategies(rewrittenApk, candidate.entry, ctx)
+        val ctorPatchedApk = ConstructorPatch.patchModuleMainConstructor(
+            sourceApk = rewrittenApk,
+            ctx = ctx,
+            label = candidate.label,
+            entryClassName = candidate.entry,
+            runtimeSuperClassName = XposedModule::class.java.name,
+            logTag = TAG,
+        )
+        Log.e(TAG, "ctor patched apk=${ctorPatchedApk.absolutePath}")
+        inspectDexFileClasses(ctorPatchedApk, candidate.label + "-ctorpatched")
+        probeDexLoadClass(ctorPatchedApk, candidate.entry, candidate.label + "-ctorpatched")
+
+        val loaderResult = loadEntryClassWithStrategies(ctorPatchedApk, candidate.entry, ctx)
         Log.e(TAG, "entry load strategy=${loaderResult.strategy}")
         Log.e(TAG, "entryClassLoader=${loaderResult.entryClass.classLoader}")
         Log.e(TAG, "entrySuper=${loaderResult.entryClass.superclass?.name}")
@@ -205,7 +217,7 @@ object BridgeRuntime {
                 throw t
             }
 
-            Log.e(TAG, "ctor invoke hit super ctor mismatch, trying allocateInstance fallback: $chain", t)
+            Log.e(TAG, "ctor invoke still hit super ctor mismatch after ctorPatch, trying allocateInstance fallback: $chain", t)
 
             val entryClass = ctor.declaringClass
             val instance = allocateInstanceWithoutConstructor(entryClass)
