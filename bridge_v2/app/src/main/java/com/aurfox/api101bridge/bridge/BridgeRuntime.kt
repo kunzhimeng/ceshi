@@ -66,7 +66,7 @@ object BridgeRuntime {
 
     @JvmStatic
     fun dispatchPackageLoaded(param: PackageLoadedParam) {
-    Log.e(TAG, "PROBE-0326-NATIVE-LIB-909")
+    Log.e(TAG, "PROBE-0326-POPUP-TRACE-910")
     val loaded = ensureLoaded(param) ?: run {
         Log.e(TAG, "ensureLoaded returned null")
         return
@@ -77,9 +77,11 @@ object BridgeRuntime {
             ?: error("onPackageLoaded parameter type unavailable")
         val pluginParam = PluginParamProxyFactory.create(pluginPackageLoadedParam, param)
         Log.e(TAG, "about to invoke legacy onPackageLoaded with paramType=${pluginPackageLoadedParam.name}")
+        PopupTrace.note("before legacy onPackageLoaded", TAG)
         val onPackageLoaded = loaded.onPackageLoaded ?: error("onPackageLoaded method missing")
         onPackageLoaded.invoke(loaded.entryInstance, pluginParam)
         Log.e(TAG, "legacy onPackageLoaded invoked")
+        PopupTrace.note("after legacy onPackageLoaded", TAG)
     }.onFailure {
         Log.e(TAG, "dispatchPackageLoaded failed: ${throwableChain(it)}", it)
         dumpObjectState("entryAfterDispatchFailure", loaded.entryInstance, 3)
@@ -94,6 +96,7 @@ object BridgeRuntime {
             return null
         }
         Log.e("API101BridgeV2", "currentApplicationContext=${ctx.packageName}")
+        PopupTrace.start(ctx, TAG)
 
         val outerApk = PluginStorage.materializeBundledPlugin(ctx, HOST_PACKAGE)
             ?: error("materialized outer apk null")
