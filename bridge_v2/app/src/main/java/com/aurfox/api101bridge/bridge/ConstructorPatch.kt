@@ -40,6 +40,14 @@ object ConstructorPatch {
         val outDir = File(ctx.cacheDir, PATCH_DIR).apply { mkdirs() }
         val outFile = File(outDir, sourceApk.nameWithoutExtension + "-$label-ctorpatch.apk")
 
+        Log.e(
+            logTag,
+            "CTOR_PATCH_ENTERED_REAL source=" + sourceApk.absolutePath +
+                ", out=" + outFile.absolutePath +
+                ", entry=" + entryClassName +
+                ", runtimeSuper=" + runtimeSuperClassName
+        )
+
         val targetType = dotToType(entryClassName)
         val runtimeSuperType = dotToType(runtimeSuperClassName)
 
@@ -90,6 +98,7 @@ object ConstructorPatch {
             "ctorPatch finished: entry=$entryClassName, runtimeSuper=$runtimeSuperClassName, " +
                 "classesDexCount=$classesDexCount, methodsPatched=$methodsPatched, patchApplied=${methodsPatched > 0}"
         )
+        Log.e(logTag, "CTOR_PATCH_EXIT_REAL out=" + outFile.absolutePath)
 
         return outFile
     }
@@ -126,7 +135,7 @@ object ConstructorPatch {
         }
 
         if (methodsPatched == 0) {
-            Log.e(logTag, "ctorPatch no-op for $entryName")
+            Log.e(logTag, "CTOR_PATCH_NOOP dex=" + entryName)
             return rawDex to 0
         }
 
@@ -230,8 +239,9 @@ object ConstructorPatch {
             mutable.replaceInstruction(index, replacement)
             Log.e(
                 logTag,
-                "ctorPatch replaced invoke-direct in $ownerType-><init> " +
-                    "from ${ref.parameterTypes} to ()V at instructionIndex=$index"
+                "CTOR_PATCH_REPLACED owner=" + ownerType +
+                    ", fromParams=" + ref.parameterTypes +
+                    ", instructionIndex=" + index
             )
             replaced = true
             break
