@@ -290,7 +290,11 @@ object BridgeRuntime {
                                         "holderClass=${holder.javaClass.name}, depth=$depth"
                                 )
                                 seedObject(holder, depth + 1)
+                            } else {
+                                Unit
                             }
+                        } else {
+                            Unit
                         }
                     } else {
                         Unit
