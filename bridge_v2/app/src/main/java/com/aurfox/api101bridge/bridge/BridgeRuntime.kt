@@ -66,7 +66,7 @@ object BridgeRuntime {
 
     @JvmStatic
     fun dispatchPackageLoaded(param: PackageLoadedParam) {
-    Log.e(TAG, "PROBE-0326-POPUP-TRACE-910")
+    Log.e(TAG, "PROBE-0326-POPUP-TRACE-911")
     val loaded = ensureLoaded(param) ?: run {
         Log.e(TAG, "ensureLoaded returned null")
         return
