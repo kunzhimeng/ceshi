@@ -280,7 +280,8 @@ object BridgeRuntime {
                         )
                         seedObject(curValue, depth + 1)
                     } else if (curValue == null && shouldConstructHolder(field.type)) {
-                        if (holderLooksUseful(field.type, interfaceProxy, moduleLoadedParamProxy)) {
+                        val useful = holderLooksUseful(field.type, interfaceProxy, moduleLoadedParamProxy)
+                        if (useful) {
                             val holder = createHolderOrNull(field.type)
                             if (holder != null) {
                                 field.set(obj, holder)
@@ -290,15 +291,11 @@ object BridgeRuntime {
                                         "holderClass=${holder.javaClass.name}, depth=$depth"
                                 )
                                 seedObject(holder, depth + 1)
-                            } else {
-                                Unit
                             }
-                        } else {
-                            Unit
                         }
-                    } else {
-                        Unit
                     }
+
+                    Unit
                 }.onFailure {
                     Log.e(TAG, "prime field failed ${owner.name}#${field.name}: ${throwableChain(it)}", it)
                 }
